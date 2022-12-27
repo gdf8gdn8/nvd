@@ -1,0 +1,37 @@
+syntax = "proto3";
+package cve.api;
+
+message NvdCve {
+    repeated CveItem cve_items = 1;
+}
+
+message CveItem {
+    Cve cve = 1;
+    Configurations configurations = 2;
+}
+
+message Cve {
+    CveDataMeta cve_data_meta = 1;
+}
+
+message CveDataMeta {
+    string id = 1;
+}
+
+message Configurations {
+    repeated Node nodes = 1;
+}
+
+message Node {
+    string operator = 1;
+    repeated Node children = 2;
+    repeated CpeMatch cpe_match = 3;
+}
+
+message CpeMatch {
+    string cpe23_uri = 1;
+    optional string version_start_excluding = 2;
+    optional string version_end_excluding = 3;
+    optional string version_start_including = 4;
+    optional string version_end_including = 5;
+}
