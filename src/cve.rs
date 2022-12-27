@@ -19,6 +19,7 @@ mod cve_api {
 }
 static DATA_DIR: &str = "./data";
 
+// cargo run --bin cve
 #[allow(dead_code)]
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
