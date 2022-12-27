@@ -3,7 +3,6 @@ use std::{
     io::{BufReader, Read, Write},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
-    thread::{self},
 };
 
 use self::cve_api::{Configurations, CpeMatch, Cve, CveDataMeta, CveItem, Node, NvdCve};
@@ -161,7 +160,9 @@ async fn make_db(path_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             let path_dir = path_dir.to_owned();
-            thread::spawn(move || json_to_proto(&path, &path_dir, thread_counter));
+            tokio::spawn(async move {
+                json_to_proto(&path, &path_dir, thread_counter);
+            });
         }
     }
     let thread_counter = Arc::clone(&thread_counter);
