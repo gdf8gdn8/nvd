@@ -21,6 +21,7 @@ static DATA_DIR: &str = "./data";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    
     Ok(())
 }
 impl NvdCve {
@@ -189,8 +190,23 @@ fn json_to_proto(path_json_gz: &Path, path_dir: &Path, thread_counter: Arc<Mutex
     drop(thread_count);
 }
 
-async fn load_db(path_dir: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
-    Ok(())
+async fn load_db(path_dir: PathBuf) -> Result<Vec<NvdCve>, Box<dyn std::error::Error>> {
+    let mut db_list = Vec::new();
+    for entry in fs::read_dir(&path_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let file_name_json = &path.file_name().unwrap().to_str().unwrap();
+        if path.is_file() && file_name_json.ends_with(".proto.gz") {
+            let gz_file = File::open(path).unwrap();
+            let gz_decoder = flate2::read::GzDecoder::new(gz_file);
+            let mut reader = BufReader::new(gz_decoder);
+            let mut buf = Vec::new();
+            reader.read_to_end(&mut buf).unwrap();
+            let nvd_cve: NvdCve = prost::Message::decode(buf.as_slice()).unwrap();
+            db_list.push(nvd_cve);
+        }
+    }
+    Ok(db_list)
 }
 
 async fn sync_cve(path_dir: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
@@ -310,7 +326,8 @@ mod tests {
     async fn test_load_db() -> Result<(), Box<dyn std::error::Error>> {
         init_log();
         let path_dir = init_dir(DATA_DIR).await?;
-        load_db(path_dir).await?;
+        let db_list = load_db(path_dir).await?;
+        log::info!("db_list len: {}", db_list.len());
         Ok(())
     }
 
