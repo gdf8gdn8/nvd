@@ -21,7 +21,6 @@ static DATA_DIR: &str = "./data";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    
     Ok(())
 }
 impl NvdCve {
