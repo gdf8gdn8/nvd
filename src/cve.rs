@@ -251,8 +251,8 @@ async fn download(year: i32, path_dir: PathBuf) -> Result<(), Box<dyn std::error
             let sha256_local = hex::encode_upper(Sha256::digest(buf));
             let sha256_local = sha256_local.as_str();
             if sha256_local == sha256_lastest {
-                // no need to redownload
-                log::debug!("no need to redownload, same sha256: {}", sha256_lastest);
+                // not need to redownload
+                log::debug!("not need to download");
                 return Ok(());
             }
         }
