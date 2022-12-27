@@ -6,21 +6,29 @@ use std::{
     thread::{self},
 };
 
+use self::cve_api::{Configurations, CpeMatch, Cve, CveDataMeta, CveItem, Node, NvdCve};
 use chrono::{Datelike, Local};
 use futures::future::join_all;
 use prost::Message;
 use sha2::{Digest, Sha256};
 use tokio::time::{sleep, Duration};
-
-use self::cve_api::{Configurations, CpeMatch, Cve, CveDataMeta, CveItem, Node, NvdCve};
+use tracing_subscriber::fmt::{format::Writer, time::FormatTime};
 
 mod cve_api {
     include!(concat!(env!("OUT_DIR"), "/cve.api.rs"));
 }
 static DATA_DIR: &str = "./data";
 
+#[allow(dead_code)]
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    init_log();
+    let path_dir = init_dir(DATA_DIR).await?;
+    let _ = sync_cve(&path_dir).await?;
+    let _ = make_db(&path_dir).await?;
+    let db_list = load_db(&path_dir).await?;
+    log::info!("db_list len: {}", db_list.len());
+    cpe_match().await?;
     Ok(())
 }
 impl NvdCve {
@@ -131,10 +139,10 @@ pub async fn cpe_match() -> Result<(), Box<dyn std::error::Error>> {
     let _ = init_dir(DATA_DIR).await;
     Ok(())
 }
-async fn make_db(path_dir: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+async fn make_db(path_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let num_cpus = num_cpus::get_physical();
     let thread_counter = Arc::new(Mutex::new(0));
-    for entry in fs::read_dir(&path_dir)? {
+    for entry in fs::read_dir(path_dir)? {
         let entry = entry?;
         let path = entry.path();
         let file_name_json = &path.file_name().unwrap().to_str().unwrap();
@@ -189,9 +197,9 @@ fn json_to_proto(path_json_gz: &Path, path_dir: &Path, thread_counter: Arc<Mutex
     drop(thread_count);
 }
 
-async fn load_db(path_dir: PathBuf) -> Result<Vec<NvdCve>, Box<dyn std::error::Error>> {
+async fn load_db(path_dir: &PathBuf) -> Result<Vec<NvdCve>, Box<dyn std::error::Error>> {
     let mut db_list = Vec::new();
-    for entry in fs::read_dir(&path_dir)? {
+    for entry in fs::read_dir(path_dir)? {
         let entry = entry?;
         let path = entry.path();
         let file_name_json = &path.file_name().unwrap().to_str().unwrap();
@@ -208,7 +216,7 @@ async fn load_db(path_dir: PathBuf) -> Result<Vec<NvdCve>, Box<dyn std::error::E
     Ok(db_list)
 }
 
-async fn sync_cve(path_dir: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+async fn sync_cve(path_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let year_start = 2002;
     let year_now = Local::now().year();
     let file_count = year_now - year_start + 1;
@@ -268,34 +276,31 @@ async fn init_dir(data_dir: &str) -> Result<PathBuf, Box<dyn std::error::Error>>
     }
     Ok(path.to_path_buf())
 }
-
+fn init_log() {
+    struct LocalTimer;
+    impl FormatTime for LocalTimer {
+        fn format_time(&self, w: &mut Writer<'_>) -> std::fmt::Result {
+            write!(w, "{}", Local::now().format("%F %T%.3f"))
+        }
+    }
+    let format = tracing_subscriber::fmt::format()
+        .with_level(true)
+        .with_target(false)
+        .with_thread_ids(false)
+        .with_thread_names(false)
+        .with_timer(LocalTimer);
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::TRACE)
+        .with_writer(std::io::stdout)
+        .with_ansi(true)
+        .event_format(format)
+        .init();
+}
 #[cfg(test)]
 mod tests {
 
-    use super::{init_dir, load_db, make_db, sync_cve, DATA_DIR};
+    use super::{init_dir, init_log, load_db, make_db, sync_cve, DATA_DIR};
 
-    fn init_log() {
-        use chrono::Local;
-        use tracing_subscriber::fmt::{format::Writer, time::FormatTime};
-        struct LocalTimer;
-        impl FormatTime for LocalTimer {
-            fn format_time(&self, w: &mut Writer<'_>) -> std::fmt::Result {
-                write!(w, "{}", Local::now().format("%F %T%.3f"))
-            }
-        }
-        let format = tracing_subscriber::fmt::format()
-            .with_level(true)
-            .with_target(false)
-            .with_thread_ids(false)
-            .with_thread_names(false)
-            .with_timer(LocalTimer);
-        tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::TRACE)
-            .with_writer(std::io::stdout)
-            .with_ansi(true)
-            .event_format(format)
-            .init();
-    }
     // cargo test cve::tests::test_init_dir
     #[tokio::test]
     async fn test_init_dir() -> Result<(), Box<dyn std::error::Error>> {
