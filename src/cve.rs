@@ -314,7 +314,7 @@ mod tests {
     async fn test_sync_cve() -> Result<(), Box<dyn std::error::Error>> {
         init_log();
         let path_dir = init_dir(DATA_DIR).await?;
-        let _ = sync_cve(path_dir).await?;
+        let _ = sync_cve(&path_dir).await?;
         Ok(())
     }
     // cargo test cve::tests::test_make_db
@@ -322,7 +322,7 @@ mod tests {
     async fn test_make_db() -> Result<(), Box<dyn std::error::Error>> {
         init_log();
         let path_dir = init_dir(DATA_DIR).await?;
-        let _ = make_db(path_dir).await?;
+        let _ = make_db(&path_dir).await?;
         Ok(())
     }
     // cargo test cve::tests::test_load_db
@@ -330,7 +330,7 @@ mod tests {
     async fn test_load_db() -> Result<(), Box<dyn std::error::Error>> {
         init_log();
         let path_dir = init_dir(DATA_DIR).await?;
-        let db_list = load_db(path_dir).await?;
+        let db_list = load_db(&path_dir).await?;
         log::info!("db_list len: {}", db_list.len());
         Ok(())
     }
