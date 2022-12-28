@@ -164,7 +164,10 @@ async fn make_db(path_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
             }
             let path_dir = path_dir.to_owned();
             tokio::spawn(async move {
-                let _ = json_to_proto(&path, &path_dir, thread_counter).await;
+                let _ = json_to_proto(&path, &path_dir).await;
+                let mut thread_count = thread_counter.lock().unwrap();
+                *thread_count -= 1;
+                drop(thread_count);
             });
         }
     }
@@ -185,7 +188,6 @@ async fn make_db(path_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
 async fn json_to_proto(
     path_json_gz: &Path,
     path_dir: &Path,
-    thread_counter: Arc<Mutex<usize>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let file_name_json = path_json_gz.file_name().unwrap().to_str().unwrap();
     let file_name_proto = file_name_json.replace(".json.", ".proto.");
@@ -202,9 +204,6 @@ async fn json_to_proto(
     let file_proto = file_proto.into_std().await;
     let mut gz_encoder = flate2::write::GzEncoder::new(file_proto, flate2::Compression::default());
     gz_encoder.write_all(&buf).unwrap();
-    let mut thread_count = thread_counter.lock().unwrap();
-    *thread_count -= 1;
-    drop(thread_count);
     Ok(())
 }
 
