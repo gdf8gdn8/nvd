@@ -1,7 +1,6 @@
 use std::{
     io::{BufReader, Read, Write},
     path::{Path, PathBuf},
-    sync::Arc,
 };
 
 use self::cve_api::{Configurations, CpeMatch, Cve, CveDataMeta, CveItem, Node, NvdCve};
@@ -12,7 +11,7 @@ use sha2::{Digest, Sha256};
 use tokio::{
     fs::{self, File},
     io::AsyncWriteExt,
-    sync::Mutex,
+    task::JoinHandle,
     time::{sleep, Duration},
 };
 use tracing_subscriber::fmt::{format::Writer, time::FormatTime};
@@ -144,32 +143,25 @@ pub async fn cpe_match() -> Result<(), Box<dyn std::error::Error>> {
 }
 async fn make_db(path_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let num_cpus = num_cpus::get_physical();
-    let mut handle_list = Vec::new();
-    let thread_counter = Arc::new(Mutex::new(0));
+    let mut handle_list: Vec<JoinHandle<()>> = Vec::new();
     let mut entries = fs::read_dir(path_dir).await?;
     while let Some(entry) = entries.next_entry().await? {
         let path = entry.path();
         let file_name_json = &path.file_name().unwrap().to_str().unwrap();
         if path.is_file() && file_name_json.ends_with(".json.gz") {
             log::trace!("json file: {}", file_name_json);
-            let thread_counter = Arc::clone(&thread_counter);
-            loop {
-                let mut thread_count = thread_counter.lock().await;
-                if *thread_count >= num_cpus {
-                    drop(thread_count);
-                    sleep(Duration::from_millis(100)).await;
-                } else {
-                    *thread_count += 1;
-                    drop(thread_count);
-                    break;
+            while handle_list.len() >= num_cpus {
+                for i in 0..handle_list.len() {
+                    if handle_list[i].is_finished() {
+                        handle_list.remove(i);
+                        break;
+                    }
                 }
+                sleep(Duration::from_millis(100)).await;
             }
             let path_dir = path_dir.to_owned();
             let handle = tokio::spawn(async move {
                 let _ = json_to_proto(&path, &path_dir).await;
-                let mut thread_count = thread_counter.lock().await;
-                *thread_count -= 1;
-                drop(thread_count);
             });
             handle_list.push(handle);
             log::trace!("make a new thread to work");
@@ -298,7 +290,7 @@ fn init_log() {
         .with_thread_names(false)
         .with_timer(LocalTimer);
     tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::TRACE)
+        .with_max_level(tracing::Level::INFO)
         .with_writer(std::io::stdout)
         .with_ansi(true)
         .event_format(format)
