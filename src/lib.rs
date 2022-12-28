@@ -8,4 +8,4 @@
 //! ```shell
 //! target/release/cve
 //! ```
-mod cve;
+pub mod cve;
