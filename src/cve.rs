@@ -1,5 +1,4 @@
 use std::{
-    fs,
     io::{BufReader, Read, Write},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -11,7 +10,7 @@ use futures::future::join_all;
 use prost::Message;
 use sha2::{Digest, Sha256};
 use tokio::{
-    fs::File,
+    fs::{self, File},
     io::AsyncWriteExt,
     time::{sleep, Duration},
 };
@@ -145,8 +144,8 @@ pub async fn cpe_match() -> Result<(), Box<dyn std::error::Error>> {
 async fn make_db(path_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let num_cpus = num_cpus::get_physical();
     let thread_counter = Arc::new(Mutex::new(0));
-    for entry in fs::read_dir(path_dir)? {
-        let entry = entry?;
+    let mut entries = fs::read_dir(path_dir).await?;
+    while let Some(entry) = entries.next_entry().await? {
         let path = entry.path();
         let file_name_json = &path.file_name().unwrap().to_str().unwrap();
         if path.is_file() && file_name_json.ends_with(".json.gz") {
@@ -209,8 +208,8 @@ async fn json_to_proto(
 
 async fn load_db(path_dir: &PathBuf) -> Result<Vec<NvdCve>, Box<dyn std::error::Error>> {
     let mut db_list = Vec::new();
-    for entry in fs::read_dir(path_dir)? {
-        let entry = entry?;
+    let mut entries = fs::read_dir(path_dir).await?;
+    while let Some(entry) = entries.next_entry().await? {
         let path = entry.path();
         let file_name_json = &path.file_name().unwrap().to_str().unwrap();
         if path.is_file() && file_name_json.ends_with(".proto.gz") {
@@ -282,7 +281,7 @@ async fn init_dir(data_dir: &str) -> Result<PathBuf, Box<dyn std::error::Error>>
     let path = Path::new(data_dir);
     if !path.exists() {
         log::info!("create {:?}", &path);
-        fs::create_dir(path)?;
+        fs::create_dir(path).await?;
     } else {
         log::info!("{:?} has been initialized", &path);
     }
