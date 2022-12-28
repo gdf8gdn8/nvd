@@ -136,7 +136,6 @@ impl CpeMatch {
     }
 }
 pub async fn cpe_match() -> Result<(), Box<dyn std::error::Error>> {
-    let _ = init_dir(DATA_DIR).await;
     Ok(())
 }
 async fn make_db(path_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
@@ -161,7 +160,7 @@ async fn make_db(path_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
             }
             let path_dir = path_dir.to_owned();
             tokio::spawn(async move {
-                json_to_proto(&path, &path_dir, thread_counter);
+                json_to_proto(&path, &path_dir, thread_counter).await;
             });
         }
     }
@@ -179,18 +178,17 @@ async fn make_db(path_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn json_to_proto(path_json_gz: &Path, path_dir: &Path, thread_counter: Arc<Mutex<usize>>) {
-    log::trace!("read {:?}", path_json_gz);
+async fn json_to_proto(path_json_gz: &Path, path_dir: &Path, thread_counter: Arc<Mutex<usize>>) {
+    let file_name_json = path_json_gz.file_name().unwrap().to_str().unwrap();
+    let file_name_proto = file_name_json.replace(".json.", ".proto.");
+    let path_proto = path_dir.join(&file_name_proto);
+    log::info!("convert {} to {}", file_name_json, file_name_proto);
     let file_gz = File::open(&path_json_gz).unwrap();
     let gz_decoder = flate2::read::GzDecoder::new(file_gz);
     let json = serde_json::from_reader(gz_decoder).unwrap();
     let nvd_cve = NvdCve::new(&json);
     let mut buf: Vec<u8> = Vec::new();
     nvd_cve.encode(&mut buf).unwrap();
-    let file_name_json = path_json_gz.file_name().unwrap().to_str().unwrap();
-    let file_name_proto = file_name_json.replace(".json.", ".proto.");
-    let path_proto = path_dir.join(file_name_proto);
-    log::trace!("write proto: {:?}", &path_proto);
     let file_proto = File::create(path_proto).unwrap();
     let mut gz_encoder = flate2::write::GzEncoder::new(file_proto, flate2::Compression::default());
     gz_encoder.write_all(&buf).unwrap();
@@ -252,12 +250,12 @@ async fn download(year: i32, path_dir: PathBuf) -> Result<(), Box<dyn std::error
             let sha256_local = sha256_local.as_str();
             if sha256_local == sha256_lastest {
                 // not need to redownload
-                log::debug!("not need to download");
+                log::info!("{} is lastest", file_name_gz);
                 return Ok(());
             }
         }
         let url_gz = format!("https://nvd.nist.gov/feeds/json/cve/1.1/{}", file_name_gz);
-        log::debug!("download: {}", &url_gz);
+        log::info!("download: {}", &url_gz);
         let rsp = reqwest::get(url_gz).await?;
         let rsp_bytes = rsp.bytes().await?;
         let mut file_gz = File::create(path_gz).unwrap();
@@ -271,10 +269,10 @@ async fn download(year: i32, path_dir: PathBuf) -> Result<(), Box<dyn std::error
 async fn init_dir(data_dir: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let path = Path::new(data_dir);
     if !path.exists() {
-        log::trace!("create {:?}", &path);
+        log::info!("create {:?}", &path);
         fs::create_dir(path)?;
     } else {
-        log::trace!("{:?} has been initialized", &path);
+        log::info!("{:?} has been initialized", &path);
     }
     Ok(path.to_path_buf())
 }
@@ -292,7 +290,7 @@ fn init_log() {
         .with_thread_names(false)
         .with_timer(LocalTimer);
     tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::TRACE)
+        .with_max_level(tracing::Level::INFO)
         .with_writer(std::io::stdout)
         .with_ansi(true)
         .event_format(format)
