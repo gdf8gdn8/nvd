@@ -1,8 +1,6 @@
 use std::{
-    fs::{self, File},
     io::{BufReader, Read, Write},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
 };
 
 use self::cve_api::{Configurations, CpeMatch, Cve, CveDataMeta, CveItem, Node, NvdCve};
@@ -10,7 +8,12 @@ use chrono::{Datelike, Local};
 use futures::future::join_all;
 use prost::Message;
 use sha2::{Digest, Sha256};
-use tokio::time::{sleep, Duration};
+use tokio::{
+    fs::{self, File},
+    io::AsyncWriteExt,
+    task::JoinHandle,
+    time::{sleep, Duration},
+};
 use tracing_subscriber::fmt::{format::Writer, time::FormatTime};
 
 mod cve_api {
@@ -136,78 +139,72 @@ impl CpeMatch {
     }
 }
 pub async fn cpe_match() -> Result<(), Box<dyn std::error::Error>> {
-    let _ = init_dir(DATA_DIR).await;
     Ok(())
 }
 async fn make_db(path_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let num_cpus = num_cpus::get_physical();
-    let thread_counter = Arc::new(Mutex::new(0));
-    for entry in fs::read_dir(path_dir)? {
-        let entry = entry?;
+    let mut handle_list: Vec<JoinHandle<()>> = Vec::new();
+    let mut entries = fs::read_dir(path_dir).await?;
+    while let Some(entry) = entries.next_entry().await? {
         let path = entry.path();
         let file_name_json = &path.file_name().unwrap().to_str().unwrap();
         if path.is_file() && file_name_json.ends_with(".json.gz") {
-            let thread_counter = Arc::clone(&thread_counter);
-            loop {
-                let mut thread_count = thread_counter.lock().unwrap();
-                if *thread_count >= num_cpus {
-                    drop(thread_count);
-                    sleep(Duration::from_millis(100)).await;
-                } else {
-                    *thread_count += 1;
-                    drop(thread_count);
-                    break;
+            log::trace!("json file: {}", file_name_json);
+            while handle_list.len() >= num_cpus {
+                for i in 0..handle_list.len() {
+                    if handle_list[i].is_finished() {
+                        handle_list.remove(i);
+                        break;
+                    }
                 }
+                sleep(Duration::from_millis(100)).await;
             }
             let path_dir = path_dir.to_owned();
-            tokio::spawn(async move {
-                json_to_proto(&path, &path_dir, thread_counter);
+            let handle = tokio::spawn(async move {
+                let _ = json_to_proto(&path, &path_dir).await;
             });
+            handle_list.push(handle);
+            log::trace!("make a new thread to work");
         }
     }
-    let thread_counter = Arc::clone(&thread_counter);
-    loop {
-        let thread_count = thread_counter.lock().unwrap();
-        if *thread_count > 0 {
-            drop(thread_count);
-            sleep(Duration::from_millis(1000)).await;
-        } else {
-            drop(thread_count);
-            break;
-        }
+    for handle in handle_list {
+        handle.await?;
     }
     Ok(())
 }
 
-fn json_to_proto(path_json_gz: &Path, path_dir: &Path, thread_counter: Arc<Mutex<usize>>) {
-    log::trace!("read {:?}", path_json_gz);
-    let file_gz = File::open(&path_json_gz).unwrap();
+async fn json_to_proto(
+    path_json_gz: &Path,
+    path_dir: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let file_name_json = path_json_gz.file_name().unwrap().to_str().unwrap();
+    let file_name_proto = file_name_json.replace(".json.", ".proto.");
+    let path_proto = path_dir.join(&file_name_proto);
+    log::info!("convert {} to {}", file_name_json, file_name_proto);
+    let file_gz = File::open(&path_json_gz).await?;
+    let file_gz = file_gz.into_std().await;
     let gz_decoder = flate2::read::GzDecoder::new(file_gz);
     let json = serde_json::from_reader(gz_decoder).unwrap();
     let nvd_cve = NvdCve::new(&json);
     let mut buf: Vec<u8> = Vec::new();
     nvd_cve.encode(&mut buf).unwrap();
-    let file_name_json = path_json_gz.file_name().unwrap().to_str().unwrap();
-    let file_name_proto = file_name_json.replace(".json.", ".proto.");
-    let path_proto = path_dir.join(file_name_proto);
-    log::trace!("write proto: {:?}", &path_proto);
-    let file_proto = File::create(path_proto).unwrap();
+    let file_proto = File::create(path_proto).await?;
+    let file_proto = file_proto.into_std().await;
     let mut gz_encoder = flate2::write::GzEncoder::new(file_proto, flate2::Compression::default());
     gz_encoder.write_all(&buf).unwrap();
-    let mut thread_count = thread_counter.lock().unwrap();
-    *thread_count -= 1;
-    drop(thread_count);
+    Ok(())
 }
 
 async fn load_db(path_dir: &PathBuf) -> Result<Vec<NvdCve>, Box<dyn std::error::Error>> {
     let mut db_list = Vec::new();
-    for entry in fs::read_dir(path_dir)? {
-        let entry = entry?;
+    let mut entries = fs::read_dir(path_dir).await?;
+    while let Some(entry) = entries.next_entry().await? {
         let path = entry.path();
         let file_name_json = &path.file_name().unwrap().to_str().unwrap();
         if path.is_file() && file_name_json.ends_with(".proto.gz") {
-            let gz_file = File::open(path).unwrap();
-            let gz_decoder = flate2::read::GzDecoder::new(gz_file);
+            let file_gz = File::open(path).await?;
+            let file_gz = file_gz.into_std().await;
+            let gz_decoder = flate2::read::GzDecoder::new(file_gz);
             let mut reader = BufReader::new(gz_decoder);
             let mut buf = Vec::new();
             reader.read_to_end(&mut buf).unwrap();
@@ -243,7 +240,8 @@ async fn download(year: i32, path_dir: PathBuf) -> Result<(), Box<dyn std::error
         let file_name_gz = format!("nvdcve-1.1-{}.json.gz", year);
         let path_gz = path_dir.join(&file_name_gz);
         if path_gz.exists() {
-            let file_gz = File::open(&path_gz).unwrap();
+            let file_gz = File::open(&path_gz).await?;
+            let file_gz = file_gz.into_std().await;
             let gz_decoder = flate2::read::GzDecoder::new(file_gz);
             let mut buf_reader = BufReader::new(gz_decoder);
             let mut buf = Vec::new();
@@ -252,16 +250,16 @@ async fn download(year: i32, path_dir: PathBuf) -> Result<(), Box<dyn std::error
             let sha256_local = sha256_local.as_str();
             if sha256_local == sha256_lastest {
                 // not need to redownload
-                log::debug!("not need to download");
+                log::info!("{} is lastest", file_name_gz);
                 return Ok(());
             }
         }
         let url_gz = format!("https://nvd.nist.gov/feeds/json/cve/1.1/{}", file_name_gz);
-        log::debug!("download: {}", &url_gz);
+        log::info!("download: {}", &url_gz);
         let rsp = reqwest::get(url_gz).await?;
         let rsp_bytes = rsp.bytes().await?;
-        let mut file_gz = File::create(path_gz).unwrap();
-        file_gz.write_all(&rsp_bytes)?;
+        let mut file_gz = File::create(path_gz).await?;
+        file_gz.write_all(&rsp_bytes).await?;
     } else {
         log::error!("get meta fail: {}", &url_meta);
     }
@@ -271,10 +269,10 @@ async fn download(year: i32, path_dir: PathBuf) -> Result<(), Box<dyn std::error
 async fn init_dir(data_dir: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let path = Path::new(data_dir);
     if !path.exists() {
-        log::trace!("create {:?}", &path);
-        fs::create_dir(path)?;
+        log::info!("create {:?}", &path);
+        fs::create_dir(path).await?;
     } else {
-        log::trace!("{:?} has been initialized", &path);
+        log::info!("{:?} has been initialized", &path);
     }
     Ok(path.to_path_buf())
 }
@@ -292,7 +290,7 @@ fn init_log() {
         .with_thread_names(false)
         .with_timer(LocalTimer);
     tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::TRACE)
+        .with_max_level(tracing::Level::INFO)
         .with_writer(std::io::stdout)
         .with_ansi(true)
         .event_format(format)
@@ -320,7 +318,7 @@ mod tests {
         Ok(())
     }
     // cargo test cve::tests::test_make_db
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_make_db() -> Result<(), Box<dyn std::error::Error>> {
         init_log();
         let path_dir = init_dir(DATA_DIR).await?;
