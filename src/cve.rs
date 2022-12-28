@@ -138,10 +138,12 @@ impl CpeMatch {
         cpe_match_vec
     }
 }
+
 pub async fn cpe_match() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
-async fn make_db(path_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+
+pub async fn make_db(path_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let num_cpus = num_cpus::get_physical();
     let mut handle_list: Vec<JoinHandle<()>> = Vec::new();
     let mut entries = fs::read_dir(path_dir).await?;
@@ -195,7 +197,7 @@ async fn json_to_proto(
     Ok(())
 }
 
-async fn load_db(path_dir: &PathBuf) -> Result<Vec<NvdCve>, Box<dyn std::error::Error>> {
+pub async fn load_db(path_dir: &PathBuf) -> Result<Vec<NvdCve>, Box<dyn std::error::Error>> {
     let mut db_list = Vec::new();
     let mut entries = fs::read_dir(path_dir).await?;
     while let Some(entry) = entries.next_entry().await? {
@@ -215,7 +217,7 @@ async fn load_db(path_dir: &PathBuf) -> Result<Vec<NvdCve>, Box<dyn std::error::
     Ok(db_list)
 }
 
-async fn sync_cve(path_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn sync_cve(path_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let year_start = 2002;
     let year_now = Local::now().year();
     let file_count = year_now - year_start + 1;
@@ -266,7 +268,7 @@ async fn download(year: i32, path_dir: PathBuf) -> Result<(), Box<dyn std::error
     Ok(())
 }
 
-async fn init_dir(data_dir: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
+pub async fn init_dir(data_dir: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let path = Path::new(data_dir);
     if !path.exists() {
         log::info!("create {:?}", &path);
@@ -276,7 +278,7 @@ async fn init_dir(data_dir: &str) -> Result<PathBuf, Box<dyn std::error::Error>>
     }
     Ok(path.to_path_buf())
 }
-fn init_log() {
+pub fn init_log() {
     struct LocalTimer;
     impl FormatTime for LocalTimer {
         fn format_time(&self, w: &mut Writer<'_>) -> std::fmt::Result {
