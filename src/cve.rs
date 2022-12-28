@@ -1,5 +1,5 @@
 use std::{
-    fs::{self, File},
+    fs,
     io::{BufReader, Read, Write},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -10,7 +10,11 @@ use chrono::{Datelike, Local};
 use futures::future::join_all;
 use prost::Message;
 use sha2::{Digest, Sha256};
-use tokio::time::{sleep, Duration};
+use tokio::{
+    fs::File,
+    io::AsyncWriteExt,
+    time::{sleep, Duration},
+};
 use tracing_subscriber::fmt::{format::Writer, time::FormatTime};
 
 mod cve_api {
@@ -160,7 +164,7 @@ async fn make_db(path_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
             }
             let path_dir = path_dir.to_owned();
             tokio::spawn(async move {
-                json_to_proto(&path, &path_dir, thread_counter).await;
+                let _ = json_to_proto(&path, &path_dir, thread_counter).await;
             });
         }
     }
@@ -178,23 +182,30 @@ async fn make_db(path_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn json_to_proto(path_json_gz: &Path, path_dir: &Path, thread_counter: Arc<Mutex<usize>>) {
+async fn json_to_proto(
+    path_json_gz: &Path,
+    path_dir: &Path,
+    thread_counter: Arc<Mutex<usize>>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let file_name_json = path_json_gz.file_name().unwrap().to_str().unwrap();
     let file_name_proto = file_name_json.replace(".json.", ".proto.");
     let path_proto = path_dir.join(&file_name_proto);
     log::info!("convert {} to {}", file_name_json, file_name_proto);
-    let file_gz = File::open(&path_json_gz).unwrap();
+    let file_gz = File::open(&path_json_gz).await?;
+    let file_gz = file_gz.into_std().await;
     let gz_decoder = flate2::read::GzDecoder::new(file_gz);
     let json = serde_json::from_reader(gz_decoder).unwrap();
     let nvd_cve = NvdCve::new(&json);
     let mut buf: Vec<u8> = Vec::new();
     nvd_cve.encode(&mut buf).unwrap();
-    let file_proto = File::create(path_proto).unwrap();
+    let file_proto = File::create(path_proto).await?;
+    let file_proto = file_proto.into_std().await;
     let mut gz_encoder = flate2::write::GzEncoder::new(file_proto, flate2::Compression::default());
     gz_encoder.write_all(&buf).unwrap();
     let mut thread_count = thread_counter.lock().unwrap();
     *thread_count -= 1;
     drop(thread_count);
+    Ok(())
 }
 
 async fn load_db(path_dir: &PathBuf) -> Result<Vec<NvdCve>, Box<dyn std::error::Error>> {
@@ -204,8 +215,9 @@ async fn load_db(path_dir: &PathBuf) -> Result<Vec<NvdCve>, Box<dyn std::error::
         let path = entry.path();
         let file_name_json = &path.file_name().unwrap().to_str().unwrap();
         if path.is_file() && file_name_json.ends_with(".proto.gz") {
-            let gz_file = File::open(path).unwrap();
-            let gz_decoder = flate2::read::GzDecoder::new(gz_file);
+            let file_gz = File::open(path).await?;
+            let file_gz = file_gz.into_std().await;
+            let gz_decoder = flate2::read::GzDecoder::new(file_gz);
             let mut reader = BufReader::new(gz_decoder);
             let mut buf = Vec::new();
             reader.read_to_end(&mut buf).unwrap();
@@ -241,7 +253,8 @@ async fn download(year: i32, path_dir: PathBuf) -> Result<(), Box<dyn std::error
         let file_name_gz = format!("nvdcve-1.1-{}.json.gz", year);
         let path_gz = path_dir.join(&file_name_gz);
         if path_gz.exists() {
-            let file_gz = File::open(&path_gz).unwrap();
+            let file_gz = File::open(&path_gz).await?;
+            let file_gz = file_gz.into_std().await;
             let gz_decoder = flate2::read::GzDecoder::new(file_gz);
             let mut buf_reader = BufReader::new(gz_decoder);
             let mut buf = Vec::new();
@@ -258,8 +271,8 @@ async fn download(year: i32, path_dir: PathBuf) -> Result<(), Box<dyn std::error
         log::info!("download: {}", &url_gz);
         let rsp = reqwest::get(url_gz).await?;
         let rsp_bytes = rsp.bytes().await?;
-        let mut file_gz = File::create(path_gz).unwrap();
-        file_gz.write_all(&rsp_bytes)?;
+        let mut file_gz = File::create(path_gz).await?;
+        file_gz.write_all(&rsp_bytes).await?;
     } else {
         log::error!("get meta fail: {}", &url_meta);
     }
