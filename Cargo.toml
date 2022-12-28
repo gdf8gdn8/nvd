@@ -1,13 +1,14 @@
 [package]
 authors = ["Zhao Guangjian<zgj0315@gmail.com>"]
 description = "Some functions about CPE and CVE"
+documentation = "https://docs.rs/nvd"
 edition = "2021"
 keywords = ["nvd", "cve", "cpe", "match", "cpe23uri"]
 license-file = "LICENSE"
 name = "nvd"
 readme = "README.md"
 repository = "https://github.com/zgj0315/nvd/"
-version = "0.1.3"
+version = "0.1.4"
 
 [[bin]]
 name = "cve"
