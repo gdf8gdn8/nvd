@@ -14,7 +14,7 @@ pub fn criterion_benchmark(c: &mut Criterion) {
 
     c.bench_function("cpe_match", move |b| {
         b.to_async(FuturesExecutor).iter(|| async {
-            // cpe_match(black_box(&cpe23_uri_vec), black_box(&db_list)).await
+            cpe_match(black_box(&cpe23_uri_vec), black_box(&db_list)).await
             // cpe_match(&cpe23_uri_vec, &db_list).await
         })
     });
