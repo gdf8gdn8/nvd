@@ -50,7 +50,7 @@ use tracing_subscriber::fmt::{format::Writer, time::FormatTime};
 mod cve_api {
     include!(concat!(env!("OUT_DIR"), "/cve.api.rs"));
 }
-static DATA_DIR: &str = "./data";
+pub static DATA_DIR: &str = "./data";
 
 // cargo run --bin cve
 #[allow(dead_code)]
@@ -58,11 +58,18 @@ static DATA_DIR: &str = "./data";
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_log();
     let path_dir = init_dir(DATA_DIR).await?;
-    let _ = sync_cve(&path_dir).await?;
-    let _ = make_db(&path_dir).await?;
+    // let _ = sync_cve(&path_dir).await?;
+    // let _ = make_db(&path_dir).await?;
     let db_list = load_db(&path_dir).await?;
     log::info!("db_list len: {}", db_list.len());
-    cpe_match().await?;
+    let mut cpe23_uri_vec = Vec::new();
+    let line = "cpe:2.3:a:vmware:rabbitmq:3.9.10:*:*:*:*:*:*:*";
+    let cpe23_uri = Cpe23Uri::new(line);
+    cpe23_uri_vec.push(cpe23_uri);
+    log::info!("cpe23_uri: {}", cpe23_uri_list_to_string(&cpe23_uri_vec));
+    for _ in 0..100 {
+        cpe_match(&cpe23_uri_vec, &db_list).await?;
+    }
     Ok(())
 }
 impl NvdCve {
@@ -170,8 +177,383 @@ impl CpeMatch {
     }
 }
 
-pub async fn cpe_match() -> Result<(), Box<dyn std::error::Error>> {
+pub async fn cpe_match(
+    cpe23_uri_list: &Vec<Cpe23Uri>,
+    cve_db_list: &Vec<NvdCve>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let num_cpus = num_cpus::get_physical();
+    let mut handle_list: Vec<JoinHandle<()>> = Vec::new();
+    for cykl in cve_db_list {
+        while handle_list.len() >= num_cpus {
+            for i in 0..handle_list.len() {
+                if handle_list[i].is_finished() {
+                    handle_list.remove(i);
+                    break;
+                }
+            }
+            sleep(Duration::from_millis(100)).await;
+        }
+        let cpe23_uri_list = cpe23_uri_list.to_owned();
+        let cve_items = cykl.cve_items.to_owned();
+        let handle = tokio::spawn(async move {
+            for cve_item in cve_items {
+                let cve_id = cve_item.cve.unwrap().cve_data_meta.unwrap().id;
+                for node in cve_item.configurations.unwrap().nodes {
+                    if match_node(&cpe23_uri_list, &node) {
+                        log::info!("matched :{}", cve_id);
+                    }
+                }
+            }
+        });
+        handle_list.push(handle);
+    }
+    for handle in handle_list {
+        handle.await?;
+    }
+    log::info!("match finish.");
     Ok(())
+}
+
+#[derive(Debug, Clone)]
+pub struct Cpe23Uri {
+    pub part: String,
+    pub vendor: String,
+    pub product: String,
+    pub version: String,
+    pub update: String,
+    pub edition: String,
+    pub language: String,
+    pub sw_edition: String,
+    pub target_sw: String,
+    pub target_hw: String,
+    pub other: String,
+}
+
+impl Cpe23Uri {
+    pub fn new(cpe23uri: &str) -> Cpe23Uri {
+        let cpe23uri_vec: Vec<&str> = cpe23uri.split(":").collect();
+        Cpe23Uri {
+            part: cpe23uri_vec[2].to_owned(),
+            vendor: cpe23uri_vec[3].to_owned(),
+            product: cpe23uri_vec[4].to_owned(),
+            version: cpe23uri_vec[5].to_owned(),
+            update: cpe23uri_vec[6].to_owned(),
+            edition: cpe23uri_vec[7].to_owned(),
+            language: cpe23uri_vec[8].to_owned(),
+            sw_edition: cpe23uri_vec[9].to_owned(),
+            target_sw: cpe23uri_vec[10].to_owned(),
+            target_hw: cpe23uri_vec[11].to_owned(),
+            other: cpe23uri_vec[12].to_owned(),
+        }
+    }
+    pub fn to_string(&self) -> String {
+        format!(
+            "cpe:2.3:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}",
+            self.part,
+            self.vendor,
+            self.product,
+            self.version,
+            self.update,
+            self.edition,
+            self.language,
+            self.sw_edition,
+            self.target_sw,
+            self.target_hw,
+            self.other
+        )
+    }
+}
+
+fn cpe23_uri_list_to_string(cpe23_uri_list: &Vec<Cpe23Uri>) -> String {
+    let mut cpe23_uri_string_list: Vec<String> = Vec::new();
+    for cpe23_uri in cpe23_uri_list {
+        cpe23_uri_string_list.push(cpe23_uri.to_string());
+    }
+    cpe23_uri_string_list.sort();
+    cpe23_uri_string_list.into_iter().collect::<String>()
+}
+fn match_node(cpe23_uri_list: &Vec<Cpe23Uri>, node: &Node) -> bool {
+    // log::info!("match {}", cpe23_uri_list_to_string(cpe23_uri_list));
+    let operator = &node.operator;
+    let is_or = match operator.as_str() {
+        "OR" => true,
+        _ => false,
+    };
+    // children存在是match_cpe为空，反之亦然
+    let cpe_match_list = &node.cpe_match;
+    if cpe_match_list.len() > 0 {
+        let mut match_count = 0;
+        for cpe_match in cpe_match_list {
+            let cpe23_uri = &cpe_match.cpe23_uri;
+            let cpe23_uri = Cpe23Uri::new(cpe23_uri);
+            let version_start_including = &cpe_match.version_start_including;
+            let version_end_including = &cpe_match.version_end_including;
+            let version_start_excluding = &cpe_match.version_start_excluding;
+            let version_end_excluding = &cpe_match.version_end_excluding;
+            for cpe23_uri_input in cpe23_uri_list {
+                // part, vendor, product严格匹配
+                if cpe23_uri_input.part != cpe23_uri.part {
+                    continue;
+                }
+                if cpe23_uri_input.vendor != cpe23_uri.vendor {
+                    continue;
+                }
+                if cpe23_uri_input.product != cpe23_uri.product {
+                    continue;
+                }
+                // 规则中部位“*”的情况下，要严格匹配
+                if cpe23_uri.update != "*" {
+                    if cpe23_uri_input.update != cpe23_uri.update {
+                        continue;
+                    }
+                }
+                if cpe23_uri.edition != "*" {
+                    if cpe23_uri_input.edition != cpe23_uri.edition {
+                        continue;
+                    }
+                }
+                if cpe23_uri.language != "*" {
+                    if cpe23_uri_input.language != cpe23_uri.language {
+                        continue;
+                    }
+                }
+                if cpe23_uri.sw_edition != "*" {
+                    if cpe23_uri_input.sw_edition != cpe23_uri.sw_edition {
+                        continue;
+                    }
+                }
+                if cpe23_uri.target_sw != "*" {
+                    if cpe23_uri_input.target_sw != cpe23_uri.target_sw {
+                        continue;
+                    }
+                }
+                if cpe23_uri.target_hw != "*" {
+                    if cpe23_uri_input.target_hw != cpe23_uri.target_hw {
+                        continue;
+                    }
+                }
+                if cpe23_uri.other != "*" {
+                    if cpe23_uri_input.other != cpe23_uri.other {
+                        continue;
+                    }
+                }
+                // 版本号为“-”，匹配所有版本
+                if cpe23_uri.version == "-" {
+                    if is_or {
+                        return true;
+                    } else {
+                        match_count += 1;
+                        continue;
+                    }
+                }
+                // 版本号部位“-”和“*”，精确匹配版本
+                if cpe23_uri.version != "*" && cpe23_uri_input.version == cpe23_uri.version {
+                    if is_or {
+                        return true;
+                    } else {
+                        match_count += 1;
+                        continue;
+                    }
+                }
+                // 版本号为“*”，需要匹配start和end
+                if cpe23_uri.version == "*" {
+                    // 比较版本
+                    match &version_start_including {
+                        Some(start_including) => {
+                            // 包含开始版本
+                            match &version_end_including {
+                                Some(end_including) => {
+                                    // 包含开始版本,包含结束版本--[start, end]
+                                    if cpe23_uri_input
+                                        .version
+                                        .as_str()
+                                        .ge(start_including.as_str())
+                                        && cpe23_uri_input
+                                            .version
+                                            .as_str()
+                                            .le(end_including.as_str())
+                                    {
+                                        if is_or {
+                                            return true;
+                                        } else {
+                                            match_count += 1;
+                                        }
+                                    }
+                                }
+                                None => {
+                                    match &version_end_excluding {
+                                        Some(end_excluding) => {
+                                            // 包含开始版本,不包含结束版本--[start, end)
+                                            if cpe23_uri_input
+                                                .version
+                                                .as_str()
+                                                .ge(start_including.as_str())
+                                                && cpe23_uri_input
+                                                    .version
+                                                    .as_str()
+                                                    .lt(end_excluding.as_str())
+                                            {
+                                                if is_or {
+                                                    return true;
+                                                } else {
+                                                    match_count += 1;
+                                                }
+                                            }
+                                        }
+                                        None => {
+                                            // 包含开始版本,没有结束版本--[start, ∞)
+                                            if cpe23_uri_input
+                                                .version
+                                                .as_str()
+                                                .ge(start_including.as_str())
+                                            {
+                                                if is_or {
+                                                    return true;
+                                                } else {
+                                                    match_count += 1;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        None => {
+                            match &version_start_excluding {
+                                Some(start_excluding) => {
+                                    // 不包含开始版本
+                                    match &version_end_including {
+                                        Some(end_including) => {
+                                            // 不包含开始版本,包含结束版本--(start, end]
+                                            if cpe23_uri_input
+                                                .version
+                                                .as_str()
+                                                .gt(start_excluding.as_str())
+                                                && cpe23_uri_input
+                                                    .version
+                                                    .as_str()
+                                                    .le(end_including.as_str())
+                                            {
+                                                if is_or {
+                                                    return true;
+                                                } else {
+                                                    match_count += 1;
+                                                }
+                                            }
+                                        }
+                                        None => {
+                                            match &version_end_excluding {
+                                                Some(end_excluding) => {
+                                                    // 不包含开始版本,不包含结束版本--(start, end)
+                                                    if cpe23_uri_input
+                                                        .version
+                                                        .as_str()
+                                                        .gt(start_excluding.as_str())
+                                                        && cpe23_uri_input
+                                                            .version
+                                                            .as_str()
+                                                            .lt(end_excluding.as_str())
+                                                    {
+                                                        if is_or {
+                                                            return true;
+                                                        } else {
+                                                            match_count += 1;
+                                                        }
+                                                    }
+                                                }
+                                                None => {
+                                                    // 不包含开始版本,没有结束版本--(start, ∞)
+                                                    if cpe23_uri_input
+                                                        .version
+                                                        .as_str()
+                                                        .gt(start_excluding.as_str())
+                                                    {
+                                                        if is_or {
+                                                            return true;
+                                                        } else {
+                                                            match_count += 1;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                None => {
+                                    // 没有开始版本
+                                    match &version_end_including {
+                                        Some(end_including) => {
+                                            // 没有开始版本,包含结束版本--(∞, end]
+                                            if cpe23_uri_input
+                                                .version
+                                                .as_str()
+                                                .le(end_including.as_str())
+                                            {
+                                                if is_or {
+                                                    return true;
+                                                } else {
+                                                    match_count += 1;
+                                                }
+                                            }
+                                        }
+                                        None => {
+                                            match &version_end_excluding {
+                                                Some(end_excluding) => {
+                                                    // 没有开始版本,不包含结束版本--(∞, end)
+                                                    if cpe23_uri_input
+                                                        .version
+                                                        .as_str()
+                                                        .lt(end_excluding.as_str())
+                                                    {
+                                                        if is_or {
+                                                            return true;
+                                                        } else {
+                                                            match_count += 1;
+                                                        }
+                                                    }
+                                                }
+                                                None => {
+                                                    // 没有开始版本,没有结束版本--(∞, ∞)
+                                                    if is_or {
+                                                        return true;
+                                                    } else {
+                                                        match_count += 1;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // 如果是and，需要所有都匹配上
+        if match_count == cpe_match_list.len() {
+            return true;
+        }
+    }
+
+    let children = &node.children;
+    if children.len() > 0 {
+        let mut match_count = 0;
+        for child in children {
+            if match_node(cpe23_uri_list, &child) {
+                if is_or {
+                    return true;
+                } else {
+                    match_count += 1;
+                }
+            }
+        }
+        // 如果是and，需要所有都匹配上
+        if match_count == children.len() {
+            return true;
+        }
+    }
+    false
 }
 
 pub async fn make_db(path_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
@@ -332,7 +714,7 @@ pub fn init_log() {
 #[cfg(test)]
 mod tests {
 
-    use super::{init_dir, init_log, load_db, make_db, sync_cve, DATA_DIR};
+    use super::{cpe_match, init_dir, init_log, load_db, make_db, sync_cve, Cpe23Uri, DATA_DIR};
 
     // cargo test cve::tests::test_init_dir
     #[tokio::test]
@@ -368,15 +750,32 @@ mod tests {
         Ok(())
     }
 
+    // cargo test cve::tests::test_cpe_match
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_cpe_match() -> Result<(), Box<dyn std::error::Error>> {
+        init_log();
+        let path_dir = init_dir(DATA_DIR).await?;
+        let db_list = load_db(&path_dir).await?;
+        log::info!("db_list len: {}", db_list.len());
+        let mut cpe23_uri_vec = Vec::new();
+        let line = "cpe:2.3:a:vmware:rabbitmq:3.9.10:*:*:*:*:*:*:*";
+        println!("cpe23_uri: {}", line);
+        let cpe23_uri = Cpe23Uri::new(line);
+        cpe23_uri_vec.push(cpe23_uri);
+        cpe_match(&cpe23_uri_vec, &db_list).await?;
+        Ok(())
+    }
+
     // cargo test cve::tests::it_works
     #[test]
     fn it_works() {
-        use super::cve_api::NvdCve;
-        use std::fs::File;
+        use futures::executor::block_on;
 
-        let file_gz = File::open("./data/nvdcve-1.1-2022.json.gz").unwrap();
-        let gz_decoder = flate2::read::GzDecoder::new(file_gz);
-        let json = serde_json::from_reader(gz_decoder).unwrap();
-        let _ = NvdCve::new(&json);
+        init_log();
+        let path_dir = init_dir(DATA_DIR);
+        let path_dir = block_on(path_dir).unwrap();
+        let db_list = load_db(&path_dir);
+        let db_list = block_on(db_list).unwrap();
+        log::info!("{}", db_list.len());
     }
 }

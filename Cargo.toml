@@ -34,7 +34,7 @@ tracing-subscriber = "0.3"
 prost-build = "0.11"
 
 [dev-dependencies]
-criterion = {version = "0.4", features = ["html_reports"]}
+criterion = {version = "0.4", features = ["html_reports", "async_futures"]}
 
 [[bench]]
 harness = false
