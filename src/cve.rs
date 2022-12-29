@@ -769,13 +769,18 @@ mod tests {
     // cargo test cve::tests::it_works
     #[test]
     fn it_works() {
-        use futures::executor::block_on;
-
+        use tokio::runtime::Builder;
+        let runtime = Builder::new_multi_thread().enable_all().build().unwrap();
         init_log();
-        let path_dir = init_dir(DATA_DIR);
-        let path_dir = block_on(path_dir).unwrap();
-        let db_list = load_db(&path_dir);
-        let db_list = block_on(db_list).unwrap();
+        let path_dir = runtime.block_on(init_dir(DATA_DIR)).unwrap();
+        let db_list = runtime.block_on(load_db(&path_dir)).unwrap();
         log::info!("{}", db_list.len());
+        let mut cpe23_uri_vec = Vec::new();
+        let line = "cpe:2.3:a:vmware:rabbitmq:3.9.10:*:*:*:*:*:*:*";
+        let cpe23_uri = Cpe23Uri::new(line);
+        cpe23_uri_vec.push(cpe23_uri);
+        runtime
+            .block_on(cpe_match(&cpe23_uri_vec, &db_list))
+            .unwrap();
     }
 }
