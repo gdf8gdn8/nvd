@@ -178,20 +178,20 @@ pub async fn cpe_match(
     cpe23_uri_list: &Vec<Cpe23Uri>,
     cve_db_list: &Vec<NvdCve>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let num_cpus = num_cpus::get_physical();
+    let num_cpus = num_cpus::get();
     let mut handle_list: Vec<JoinHandle<()>> = Vec::new();
-    for cykl in cve_db_list {
-        while handle_list.len() >= num_cpus {
+    for nvdcve in cve_db_list {
+        'sleep: while handle_list.len() >= num_cpus {
             for i in 0..handle_list.len() {
                 if handle_list[i].is_finished() {
                     handle_list.remove(i);
-                    break;
+                    break 'sleep;
                 }
             }
-            sleep(Duration::from_millis(100)).await;
+            sleep(Duration::from_millis(10)).await;
         }
         let cpe23_uri_list = cpe23_uri_list.to_owned();
-        let cve_items = cykl.cve_items.to_owned();
+        let cve_items = nvdcve.cve_items.to_owned();
         let handle = tokio::spawn(async move {
             for cve_item in cve_items {
                 let cve_id = cve_item.cve.unwrap().cve_data_meta.unwrap().id;
@@ -287,51 +287,51 @@ fn match_node(cpe23_uri_list: &Vec<Cpe23Uri>, node: &Node) -> bool {
             let version_end_including = &cpe_match.version_end_including;
             let version_start_excluding = &cpe_match.version_start_excluding;
             let version_end_excluding = &cpe_match.version_end_excluding;
-            for cpe23_uri_input in cpe23_uri_list {
+            'cpe23_uri_list: for cpe23_uri_input in cpe23_uri_list {
                 // part, vendor, product严格匹配
                 if cpe23_uri_input.part != cpe23_uri.part {
-                    continue;
+                    continue 'cpe23_uri_list;
                 }
                 if cpe23_uri_input.vendor != cpe23_uri.vendor {
-                    continue;
+                    continue 'cpe23_uri_list;
                 }
                 if cpe23_uri_input.product != cpe23_uri.product {
-                    continue;
+                    continue 'cpe23_uri_list;
                 }
                 // 规则中部位“*”的情况下，要严格匹配
                 if cpe23_uri.update != "*" {
                     if cpe23_uri_input.update != cpe23_uri.update {
-                        continue;
+                        continue 'cpe23_uri_list;
                     }
                 }
                 if cpe23_uri.edition != "*" {
                     if cpe23_uri_input.edition != cpe23_uri.edition {
-                        continue;
+                        continue 'cpe23_uri_list;
                     }
                 }
                 if cpe23_uri.language != "*" {
                     if cpe23_uri_input.language != cpe23_uri.language {
-                        continue;
+                        continue 'cpe23_uri_list;
                     }
                 }
                 if cpe23_uri.sw_edition != "*" {
                     if cpe23_uri_input.sw_edition != cpe23_uri.sw_edition {
-                        continue;
+                        continue 'cpe23_uri_list;
                     }
                 }
                 if cpe23_uri.target_sw != "*" {
                     if cpe23_uri_input.target_sw != cpe23_uri.target_sw {
-                        continue;
+                        continue 'cpe23_uri_list;
                     }
                 }
                 if cpe23_uri.target_hw != "*" {
                     if cpe23_uri_input.target_hw != cpe23_uri.target_hw {
-                        continue;
+                        continue 'cpe23_uri_list;
                     }
                 }
                 if cpe23_uri.other != "*" {
                     if cpe23_uri_input.other != cpe23_uri.other {
-                        continue;
+                        continue 'cpe23_uri_list;
                     }
                 }
                 // 版本号为“-”，匹配所有版本
@@ -340,7 +340,7 @@ fn match_node(cpe23_uri_list: &Vec<Cpe23Uri>, node: &Node) -> bool {
                         return true;
                     } else {
                         match_count += 1;
-                        continue;
+                        continue 'cpe23_uri_list;
                     }
                 }
                 // 版本号部位“-”和“*”，精确匹配版本
@@ -349,10 +349,11 @@ fn match_node(cpe23_uri_list: &Vec<Cpe23Uri>, node: &Node) -> bool {
                         return true;
                     } else {
                         match_count += 1;
-                        continue;
+                        continue 'cpe23_uri_list;
                     }
                 }
                 // 版本号为“*”，需要匹配start和end
+                let input_version = cpe23_uri_input.version.as_str();
                 if cpe23_uri.version == "*" {
                     // 比较版本
                     match &version_start_including {
@@ -361,14 +362,8 @@ fn match_node(cpe23_uri_list: &Vec<Cpe23Uri>, node: &Node) -> bool {
                             match &version_end_including {
                                 Some(end_including) => {
                                     // 包含开始版本,包含结束版本--[start, end]
-                                    if cpe23_uri_input
-                                        .version
-                                        .as_str()
-                                        .ge(start_including.as_str())
-                                        && cpe23_uri_input
-                                            .version
-                                            .as_str()
-                                            .le(end_including.as_str())
+                                    if input_version.ge(start_including.as_str())
+                                        && input_version.le(end_including.as_str())
                                     {
                                         if is_or {
                                             return true;
@@ -381,14 +376,8 @@ fn match_node(cpe23_uri_list: &Vec<Cpe23Uri>, node: &Node) -> bool {
                                     match &version_end_excluding {
                                         Some(end_excluding) => {
                                             // 包含开始版本,不包含结束版本--[start, end)
-                                            if cpe23_uri_input
-                                                .version
-                                                .as_str()
-                                                .ge(start_including.as_str())
-                                                && cpe23_uri_input
-                                                    .version
-                                                    .as_str()
-                                                    .lt(end_excluding.as_str())
+                                            if input_version.ge(start_including.as_str())
+                                                && input_version.lt(end_excluding.as_str())
                                             {
                                                 if is_or {
                                                     return true;
@@ -399,11 +388,7 @@ fn match_node(cpe23_uri_list: &Vec<Cpe23Uri>, node: &Node) -> bool {
                                         }
                                         None => {
                                             // 包含开始版本,没有结束版本--[start, ∞)
-                                            if cpe23_uri_input
-                                                .version
-                                                .as_str()
-                                                .ge(start_including.as_str())
-                                            {
+                                            if input_version.ge(start_including.as_str()) {
                                                 if is_or {
                                                     return true;
                                                 } else {
@@ -422,14 +407,8 @@ fn match_node(cpe23_uri_list: &Vec<Cpe23Uri>, node: &Node) -> bool {
                                     match &version_end_including {
                                         Some(end_including) => {
                                             // 不包含开始版本,包含结束版本--(start, end]
-                                            if cpe23_uri_input
-                                                .version
-                                                .as_str()
-                                                .gt(start_excluding.as_str())
-                                                && cpe23_uri_input
-                                                    .version
-                                                    .as_str()
-                                                    .le(end_including.as_str())
+                                            if input_version.gt(start_excluding.as_str())
+                                                && input_version.le(end_including.as_str())
                                             {
                                                 if is_or {
                                                     return true;
@@ -442,14 +421,8 @@ fn match_node(cpe23_uri_list: &Vec<Cpe23Uri>, node: &Node) -> bool {
                                             match &version_end_excluding {
                                                 Some(end_excluding) => {
                                                     // 不包含开始版本,不包含结束版本--(start, end)
-                                                    if cpe23_uri_input
-                                                        .version
-                                                        .as_str()
-                                                        .gt(start_excluding.as_str())
-                                                        && cpe23_uri_input
-                                                            .version
-                                                            .as_str()
-                                                            .lt(end_excluding.as_str())
+                                                    if input_version.gt(start_excluding.as_str())
+                                                        && input_version.lt(end_excluding.as_str())
                                                     {
                                                         if is_or {
                                                             return true;
@@ -460,11 +433,7 @@ fn match_node(cpe23_uri_list: &Vec<Cpe23Uri>, node: &Node) -> bool {
                                                 }
                                                 None => {
                                                     // 不包含开始版本,没有结束版本--(start, ∞)
-                                                    if cpe23_uri_input
-                                                        .version
-                                                        .as_str()
-                                                        .gt(start_excluding.as_str())
-                                                    {
+                                                    if input_version.gt(start_excluding.as_str()) {
                                                         if is_or {
                                                             return true;
                                                         } else {
@@ -481,11 +450,7 @@ fn match_node(cpe23_uri_list: &Vec<Cpe23Uri>, node: &Node) -> bool {
                                     match &version_end_including {
                                         Some(end_including) => {
                                             // 没有开始版本,包含结束版本--(∞, end]
-                                            if cpe23_uri_input
-                                                .version
-                                                .as_str()
-                                                .le(end_including.as_str())
-                                            {
+                                            if input_version.le(end_including.as_str()) {
                                                 if is_or {
                                                     return true;
                                                 } else {
@@ -497,11 +462,7 @@ fn match_node(cpe23_uri_list: &Vec<Cpe23Uri>, node: &Node) -> bool {
                                             match &version_end_excluding {
                                                 Some(end_excluding) => {
                                                     // 没有开始版本,不包含结束版本--(∞, end)
-                                                    if cpe23_uri_input
-                                                        .version
-                                                        .as_str()
-                                                        .lt(end_excluding.as_str())
-                                                    {
+                                                    if input_version.lt(end_excluding.as_str()) {
                                                         if is_or {
                                                             return true;
                                                         } else {
@@ -608,7 +569,8 @@ async fn json_to_proto(
 }
 
 pub async fn load_db(path_dir: &PathBuf) -> Result<Vec<NvdCve>, Box<dyn std::error::Error>> {
-    let mut db_list = Vec::new();
+    let mut db_list: Vec<NvdCve> = Vec::new();
+    let mut nvdcve_vec = Vec::new();
     let mut entries = fs::read_dir(path_dir).await?;
     while let Some(entry) = entries.next_entry().await? {
         let path = entry.path();
@@ -621,8 +583,32 @@ pub async fn load_db(path_dir: &PathBuf) -> Result<Vec<NvdCve>, Box<dyn std::err
             let mut buf = Vec::new();
             reader.read_to_end(&mut buf).unwrap();
             let nvd_cve: NvdCve = prost::Message::decode(buf.as_slice()).unwrap();
-            db_list.push(nvd_cve);
+            nvdcve_vec.push(nvd_cve);
         }
+    }
+    // 平均分配db
+    let count_max = 3_000;
+    let mut count = 0;
+    let mut cve_item_vec = Vec::new();
+    for nvdcve in nvdcve_vec {
+        for cve_item in nvdcve.cve_items {
+            cve_item_vec.push(cve_item);
+            count += 1;
+            if count >= count_max {
+                let nvdcve = NvdCve {
+                    cve_items: cve_item_vec.to_owned(),
+                };
+                db_list.push(nvdcve);
+                cve_item_vec.clear();
+                count = 0;
+            }
+        }
+    }
+    if count > 0 {
+        let nvdcve = NvdCve {
+            cve_items: cve_item_vec.to_owned(),
+        };
+        db_list.push(nvdcve);
     }
     Ok(db_list)
 }
