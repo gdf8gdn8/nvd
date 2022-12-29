@@ -287,51 +287,51 @@ fn match_node(cpe23_uri_list: &Vec<Cpe23Uri>, node: &Node) -> bool {
             let version_end_including = &cpe_match.version_end_including;
             let version_start_excluding = &cpe_match.version_start_excluding;
             let version_end_excluding = &cpe_match.version_end_excluding;
-            for cpe23_uri_input in cpe23_uri_list {
+            'cpe23_uri_list: for cpe23_uri_input in cpe23_uri_list {
                 // part, vendor, product严格匹配
                 if cpe23_uri_input.part != cpe23_uri.part {
-                    continue;
+                    continue 'cpe23_uri_list;
                 }
                 if cpe23_uri_input.vendor != cpe23_uri.vendor {
-                    continue;
+                    continue 'cpe23_uri_list;
                 }
                 if cpe23_uri_input.product != cpe23_uri.product {
-                    continue;
+                    continue 'cpe23_uri_list;
                 }
                 // 规则中部位“*”的情况下，要严格匹配
                 if cpe23_uri.update != "*" {
                     if cpe23_uri_input.update != cpe23_uri.update {
-                        continue;
+                        continue 'cpe23_uri_list;
                     }
                 }
                 if cpe23_uri.edition != "*" {
                     if cpe23_uri_input.edition != cpe23_uri.edition {
-                        continue;
+                        continue 'cpe23_uri_list;
                     }
                 }
                 if cpe23_uri.language != "*" {
                     if cpe23_uri_input.language != cpe23_uri.language {
-                        continue;
+                        continue 'cpe23_uri_list;
                     }
                 }
                 if cpe23_uri.sw_edition != "*" {
                     if cpe23_uri_input.sw_edition != cpe23_uri.sw_edition {
-                        continue;
+                        continue 'cpe23_uri_list;
                     }
                 }
                 if cpe23_uri.target_sw != "*" {
                     if cpe23_uri_input.target_sw != cpe23_uri.target_sw {
-                        continue;
+                        continue 'cpe23_uri_list;
                     }
                 }
                 if cpe23_uri.target_hw != "*" {
                     if cpe23_uri_input.target_hw != cpe23_uri.target_hw {
-                        continue;
+                        continue 'cpe23_uri_list;
                     }
                 }
                 if cpe23_uri.other != "*" {
                     if cpe23_uri_input.other != cpe23_uri.other {
-                        continue;
+                        continue 'cpe23_uri_list;
                     }
                 }
                 // 版本号为“-”，匹配所有版本
@@ -340,7 +340,7 @@ fn match_node(cpe23_uri_list: &Vec<Cpe23Uri>, node: &Node) -> bool {
                         return true;
                     } else {
                         match_count += 1;
-                        continue;
+                        continue 'cpe23_uri_list;
                     }
                 }
                 // 版本号部位“-”和“*”，精确匹配版本
@@ -349,10 +349,11 @@ fn match_node(cpe23_uri_list: &Vec<Cpe23Uri>, node: &Node) -> bool {
                         return true;
                     } else {
                         match_count += 1;
-                        continue;
+                        continue 'cpe23_uri_list;
                     }
                 }
                 // 版本号为“*”，需要匹配start和end
+                let input_version = cpe23_uri_input.version.as_str();
                 if cpe23_uri.version == "*" {
                     // 比较版本
                     match &version_start_including {
@@ -361,14 +362,8 @@ fn match_node(cpe23_uri_list: &Vec<Cpe23Uri>, node: &Node) -> bool {
                             match &version_end_including {
                                 Some(end_including) => {
                                     // 包含开始版本,包含结束版本--[start, end]
-                                    if cpe23_uri_input
-                                        .version
-                                        .as_str()
-                                        .ge(start_including.as_str())
-                                        && cpe23_uri_input
-                                            .version
-                                            .as_str()
-                                            .le(end_including.as_str())
+                                    if input_version.ge(start_including.as_str())
+                                        && input_version.le(end_including.as_str())
                                     {
                                         if is_or {
                                             return true;
@@ -381,14 +376,8 @@ fn match_node(cpe23_uri_list: &Vec<Cpe23Uri>, node: &Node) -> bool {
                                     match &version_end_excluding {
                                         Some(end_excluding) => {
                                             // 包含开始版本,不包含结束版本--[start, end)
-                                            if cpe23_uri_input
-                                                .version
-                                                .as_str()
-                                                .ge(start_including.as_str())
-                                                && cpe23_uri_input
-                                                    .version
-                                                    .as_str()
-                                                    .lt(end_excluding.as_str())
+                                            if input_version.ge(start_including.as_str())
+                                                && input_version.lt(end_excluding.as_str())
                                             {
                                                 if is_or {
                                                     return true;
@@ -399,11 +388,7 @@ fn match_node(cpe23_uri_list: &Vec<Cpe23Uri>, node: &Node) -> bool {
                                         }
                                         None => {
                                             // 包含开始版本,没有结束版本--[start, ∞)
-                                            if cpe23_uri_input
-                                                .version
-                                                .as_str()
-                                                .ge(start_including.as_str())
-                                            {
+                                            if input_version.ge(start_including.as_str()) {
                                                 if is_or {
                                                     return true;
                                                 } else {
@@ -422,14 +407,8 @@ fn match_node(cpe23_uri_list: &Vec<Cpe23Uri>, node: &Node) -> bool {
                                     match &version_end_including {
                                         Some(end_including) => {
                                             // 不包含开始版本,包含结束版本--(start, end]
-                                            if cpe23_uri_input
-                                                .version
-                                                .as_str()
-                                                .gt(start_excluding.as_str())
-                                                && cpe23_uri_input
-                                                    .version
-                                                    .as_str()
-                                                    .le(end_including.as_str())
+                                            if input_version.gt(start_excluding.as_str())
+                                                && input_version.le(end_including.as_str())
                                             {
                                                 if is_or {
                                                     return true;
@@ -442,14 +421,8 @@ fn match_node(cpe23_uri_list: &Vec<Cpe23Uri>, node: &Node) -> bool {
                                             match &version_end_excluding {
                                                 Some(end_excluding) => {
                                                     // 不包含开始版本,不包含结束版本--(start, end)
-                                                    if cpe23_uri_input
-                                                        .version
-                                                        .as_str()
-                                                        .gt(start_excluding.as_str())
-                                                        && cpe23_uri_input
-                                                            .version
-                                                            .as_str()
-                                                            .lt(end_excluding.as_str())
+                                                    if input_version.gt(start_excluding.as_str())
+                                                        && input_version.lt(end_excluding.as_str())
                                                     {
                                                         if is_or {
                                                             return true;
@@ -460,11 +433,7 @@ fn match_node(cpe23_uri_list: &Vec<Cpe23Uri>, node: &Node) -> bool {
                                                 }
                                                 None => {
                                                     // 不包含开始版本,没有结束版本--(start, ∞)
-                                                    if cpe23_uri_input
-                                                        .version
-                                                        .as_str()
-                                                        .gt(start_excluding.as_str())
-                                                    {
+                                                    if input_version.gt(start_excluding.as_str()) {
                                                         if is_or {
                                                             return true;
                                                         } else {
@@ -481,11 +450,7 @@ fn match_node(cpe23_uri_list: &Vec<Cpe23Uri>, node: &Node) -> bool {
                                     match &version_end_including {
                                         Some(end_including) => {
                                             // 没有开始版本,包含结束版本--(∞, end]
-                                            if cpe23_uri_input
-                                                .version
-                                                .as_str()
-                                                .le(end_including.as_str())
-                                            {
+                                            if input_version.le(end_including.as_str()) {
                                                 if is_or {
                                                     return true;
                                                 } else {
@@ -497,11 +462,7 @@ fn match_node(cpe23_uri_list: &Vec<Cpe23Uri>, node: &Node) -> bool {
                                             match &version_end_excluding {
                                                 Some(end_excluding) => {
                                                     // 没有开始版本,不包含结束版本--(∞, end)
-                                                    if cpe23_uri_input
-                                                        .version
-                                                        .as_str()
-                                                        .lt(end_excluding.as_str())
-                                                    {
+                                                    if input_version.lt(end_excluding.as_str()) {
                                                         if is_or {
                                                             return true;
                                                         } else {
