@@ -188,7 +188,7 @@ pub async fn cpe_match(
                     break 'sleep;
                 }
             }
-            sleep(Duration::from_millis(100)).await;
+            sleep(Duration::from_millis(10)).await;
         }
         let cpe23_uri_list = cpe23_uri_list.to_owned();
         let cve_items = nvdcve.cve_items.to_owned();
@@ -569,7 +569,8 @@ async fn json_to_proto(
 }
 
 pub async fn load_db(path_dir: &PathBuf) -> Result<Vec<NvdCve>, Box<dyn std::error::Error>> {
-    let mut db_list = Vec::new();
+    let mut db_list: Vec<NvdCve> = Vec::new();
+    let mut nvdcve_vec = Vec::new();
     let mut entries = fs::read_dir(path_dir).await?;
     while let Some(entry) = entries.next_entry().await? {
         let path = entry.path();
@@ -582,8 +583,32 @@ pub async fn load_db(path_dir: &PathBuf) -> Result<Vec<NvdCve>, Box<dyn std::err
             let mut buf = Vec::new();
             reader.read_to_end(&mut buf).unwrap();
             let nvd_cve: NvdCve = prost::Message::decode(buf.as_slice()).unwrap();
-            db_list.push(nvd_cve);
+            nvdcve_vec.push(nvd_cve);
         }
+    }
+    // 平均分配db
+    let count_max = 3_000;
+    let mut count = 0;
+    let mut cve_item_vec = Vec::new();
+    for nvdcve in nvdcve_vec {
+        for cve_item in nvdcve.cve_items {
+            cve_item_vec.push(cve_item);
+            count += 1;
+            if count >= count_max {
+                let nvdcve = NvdCve {
+                    cve_items: cve_item_vec.to_owned(),
+                };
+                db_list.push(nvdcve);
+                cve_item_vec.clear();
+                count = 0;
+            }
+        }
+    }
+    if count > 0 {
+        let nvdcve = NvdCve {
+            cve_items: cve_item_vec.to_owned(),
+        };
+        db_list.push(nvdcve);
     }
     Ok(db_list)
 }
