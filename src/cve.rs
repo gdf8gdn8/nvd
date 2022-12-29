@@ -178,7 +178,7 @@ pub async fn cpe_match(
     cpe23_uri_list: &Vec<Cpe23Uri>,
     cve_db_list: &Vec<NvdCve>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let num_cpus = num_cpus::get_physical();
+    let num_cpus = num_cpus::get();
     let mut handle_list: Vec<JoinHandle<()>> = Vec::new();
     for cykl in cve_db_list {
         while handle_list.len() >= num_cpus {
