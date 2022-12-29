@@ -67,9 +67,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cpe23_uri = Cpe23Uri::new(line);
     cpe23_uri_vec.push(cpe23_uri);
     log::info!("cpe23_uri: {}", cpe23_uri_list_to_string(&cpe23_uri_vec));
-    for _ in 0..100 {
-        cpe_match(&cpe23_uri_vec, &db_list).await?;
-    }
+    cpe_match(&cpe23_uri_vec, &db_list).await?;
     Ok(())
 }
 impl NvdCve {
@@ -704,12 +702,20 @@ pub fn init_log() {
         .with_thread_ids(false)
         .with_thread_names(false)
         .with_timer(LocalTimer);
-    tracing_subscriber::fmt()
+    match tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
         .with_writer(std::io::stdout)
         .with_ansi(true)
         .event_format(format)
-        .init();
+        .try_init()
+    {
+        Ok(_) => {
+            log::info!("log initialized");
+        }
+        Err(_) => {
+            log::info!("log has been initialized");
+        }
+    };
 }
 #[cfg(test)]
 mod tests {
