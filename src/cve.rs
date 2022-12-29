@@ -54,12 +54,12 @@ pub static DATA_DIR: &str = "./data";
 
 // cargo run --bin cve
 #[allow(dead_code)]
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_log();
     let path_dir = init_dir(DATA_DIR).await?;
-    // let _ = sync_cve(&path_dir).await?;
-    // let _ = make_db(&path_dir).await?;
+    let _ = sync_cve(&path_dir).await?;
+    let _ = make_db(&path_dir).await?;
     let db_list = load_db(&path_dir).await?;
     log::info!("db_list len: {}", db_list.len());
     let mut cpe23_uri_vec = Vec::new();
