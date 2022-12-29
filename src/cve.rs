@@ -181,11 +181,11 @@ pub async fn cpe_match(
     let num_cpus = num_cpus::get();
     let mut handle_list: Vec<JoinHandle<()>> = Vec::new();
     for nvdcve in cve_db_list {
-        while handle_list.len() >= num_cpus {
+        'sleep: while handle_list.len() >= num_cpus {
             for i in 0..handle_list.len() {
                 if handle_list[i].is_finished() {
                     handle_list.remove(i);
-                    break;
+                    break 'sleep;
                 }
             }
             sleep(Duration::from_millis(100)).await;
