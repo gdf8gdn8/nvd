@@ -180,7 +180,7 @@ pub async fn cpe_match(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let num_cpus = num_cpus::get();
     let mut handle_list: Vec<JoinHandle<()>> = Vec::new();
-    for cykl in cve_db_list {
+    for nvdcve in cve_db_list {
         while handle_list.len() >= num_cpus {
             for i in 0..handle_list.len() {
                 if handle_list[i].is_finished() {
@@ -191,7 +191,7 @@ pub async fn cpe_match(
             sleep(Duration::from_millis(100)).await;
         }
         let cpe23_uri_list = cpe23_uri_list.to_owned();
-        let cve_items = cykl.cve_items.to_owned();
+        let cve_items = nvdcve.cve_items.to_owned();
         let handle = tokio::spawn(async move {
             for cve_item in cve_items {
                 let cve_id = cve_item.cve.unwrap().cve_data_meta.unwrap().id;
