@@ -2,12 +2,17 @@ syntax = "proto3";
 package cve.api;
 
 message NvdCve {
-    repeated CveItem cve_items = 1;
+    repeated CveItemBytes cve_item_bytes_list = 1;
 }
 
 message CveItem {
     Cve cve = 1;
     Configurations configurations = 2;
+}
+
+// CveItem序列化成proto后，再gz压缩
+message CveItemBytes {
+    bytes cve_item_bytes = 1;
 }
 
 message Cve {
