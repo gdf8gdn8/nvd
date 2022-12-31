@@ -33,8 +33,11 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use self::cve_api::{Configurations, CpeMatch, Cve, CveDataMeta, CveItem, Node, NvdCve};
+use self::cve_api::{
+    Configurations, CpeMatch, Cve, CveDataMeta, CveItem, CveItemBytes, Node, NvdCve,
+};
 use chrono::{Datelike, Local};
+use flate2::{read::GzDecoder, write::GzEncoder, Compression};
 use futures::future::join_all;
 use prost::Message;
 use sha2::{Digest, Sha256};
@@ -73,15 +76,17 @@ impl NvdCve {
     #[allow(dead_code)]
     fn new(json: &serde_json::Value) -> NvdCve {
         let cve_items = &json["CVE_Items"];
-        let cve_items = CveItem::new(&cve_items);
-        NvdCve { cve_items }
+        let cve_item_bytes_list = CveItem::new(&cve_items);
+        NvdCve {
+            cve_item_bytes_list,
+        }
     }
 }
 
 impl CveItem {
-    fn new(json: &serde_json::Value) -> Vec<CveItem> {
+    fn new(json: &serde_json::Value) -> Vec<CveItemBytes> {
         let json = json.as_array().unwrap();
-        let mut cve_items = Vec::new();
+        let mut cve_item_bytes_list = Vec::new();
         for cve_item in json.iter() {
             let cve = &cve_item["cve"];
             let cve = Some(Cve::new(cve));
@@ -91,9 +96,18 @@ impl CveItem {
                 cve,
                 configurations,
             };
-            cve_items.push(cve_item);
+            // CveItem序列化成proto后，再gz压缩
+            let mut buf: Vec<u8> = Vec::new();
+            cve_item.encode(&mut buf).unwrap();
+            let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+            encoder.write_all(&buf).unwrap();
+            let buf = encoder.finish().unwrap();
+            let cve_item_bytes = CveItemBytes {
+                cve_item_bytes: buf,
+            };
+            cve_item_bytes_list.push(cve_item_bytes);
         }
-        cve_items
+        cve_item_bytes_list
     }
 }
 
@@ -181,17 +195,27 @@ pub async fn cpe_match(
     let num_cpus = num_cpus::get();
     let mut handle_list: Vec<JoinHandle<()>> = Vec::new();
     for nvdcve in cve_db_list {
+        let cpe23_uri_list = cpe23_uri_list.to_owned();
+        let mut cve_items = Vec::new();
+        for cve_items_bytes in &nvdcve.cve_item_bytes_list {
+            let mut decoder = GzDecoder::new(&cve_items_bytes.cve_item_bytes[..]);
+            let mut buf = Vec::new();
+            decoder.read_to_end(&mut buf).unwrap();
+            let cve_item: CveItem = prost::Message::decode(buf.as_slice()).unwrap();
+            cve_items.push(cve_item);
+        }
+        // sleep放在这里，性能更好
         'sleep: while handle_list.len() >= num_cpus {
             for i in 0..handle_list.len() {
                 if handle_list[i].is_finished() {
                     handle_list.remove(i);
+                    log::info!("解压缩比match慢,cpe match需要等解压缩");
                     break 'sleep;
                 }
             }
+            log::info!("解压缩比match快,需要等cpe match");
             sleep(Duration::from_millis(10)).await;
         }
-        let cpe23_uri_list = cpe23_uri_list.to_owned();
-        let cve_items = nvdcve.cve_items.to_owned();
         let handle = tokio::spawn(async move {
             for cve_item in cve_items {
                 let cve_id = cve_item.cve.unwrap().cve_data_meta.unwrap().id;
@@ -589,24 +613,24 @@ pub async fn load_db(path_dir: &PathBuf) -> Result<Vec<NvdCve>, Box<dyn std::err
     // 平均分配db
     let count_max = 3_000;
     let mut count = 0;
-    let mut cve_item_vec = Vec::new();
+    let mut cve_item_bytes_list = Vec::new();
     for nvdcve in nvdcve_vec {
-        for cve_item in nvdcve.cve_items {
-            cve_item_vec.push(cve_item);
+        for cve_item_bytes in nvdcve.cve_item_bytes_list {
+            cve_item_bytes_list.push(cve_item_bytes);
             count += 1;
             if count >= count_max {
                 let nvdcve = NvdCve {
-                    cve_items: cve_item_vec.to_owned(),
+                    cve_item_bytes_list: cve_item_bytes_list.to_owned(),
                 };
                 db_list.push(nvdcve);
-                cve_item_vec.clear();
+                cve_item_bytes_list.clear();
                 count = 0;
             }
         }
     }
     if count > 0 {
         let nvdcve = NvdCve {
-            cve_items: cve_item_vec.to_owned(),
+            cve_item_bytes_list,
         };
         db_list.push(nvdcve);
     }
