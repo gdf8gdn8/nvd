@@ -29,3 +29,4 @@
 //! ```
 
 pub mod cve;
+pub mod cpe;
