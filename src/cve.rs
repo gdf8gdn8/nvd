@@ -191,14 +191,21 @@ pub async fn cpe_match(
             for cve_items_bytes in nvdcve.cve_item_bytes_list {
                 let mut decoder = GzDecoder::new(&cve_items_bytes.cve_item_bytes[..]);
                 let mut buf = Vec::new();
-                decoder.read_to_end(&mut buf).unwrap();
-                let cve_item: CveItem = prost::Message::decode(buf.as_slice()).unwrap();
-                let cve_id = cve_item.cve.unwrap().cve_data_meta.unwrap().id;
-                for node in cve_item.configurations.unwrap().nodes {
-                    if match_node(&cpe23_uri_list, &node) {
-                        log::info!("matched :{}", cve_id);
+                match decoder.read_to_end(&mut buf) {
+                    Ok(_) => {
+                        let cve_item: CveItem = prost::Message::decode(buf.as_slice()).unwrap();
+                        let cve_id = cve_item.cve.unwrap().cve_data_meta.unwrap().id;
+                        for node in cve_item.configurations.unwrap().nodes {
+                            if match_node(&cpe23_uri_list, &node) {
+                                log::info!("matched :{}", cve_id);
+                            }
+                        }
                     }
-                }
+                    Err(err) => {
+                        log::error!("{}", err);
+                        log::info!("size: {}", cve_items_bytes.cve_item_bytes.len());
+                    }
+                };
             }
         });
         handle_list.push(handle);
@@ -577,7 +584,10 @@ pub async fn load_db(path_dir: &PathBuf) -> Result<Vec<NvdCve>, Box<dyn std::err
     while let Some(entry) = entries.next_entry().await? {
         let path = entry.path();
         let file_name_json = &path.file_name().unwrap().to_str().unwrap();
-        if path.is_file() && file_name_json.ends_with(".proto.gz") {
+        if path.is_file()
+            && file_name_json.starts_with("nvdcve-1.1-")
+            && file_name_json.ends_with(".proto.gz")
+        {
             let file_gz = File::open(path).await?;
             let file_gz = file_gz.into_std().await;
             let gz_decoder = flate2::read::GzDecoder::new(file_gz);
