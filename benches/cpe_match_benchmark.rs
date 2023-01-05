@@ -1,13 +1,7 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use nvd::cve::{
-    cpe_match,
-    init_dir,
-    load_db,
-    // make_db, sync_cve,
-    Cpe23Uri,
-    DATA_DIR,
-};
+use nvd::cve::{cpe_match, init_dir, load_db, Cpe23Uri, DATA_DIR};
 use tokio::runtime::Builder;
+
 pub fn criterion_benchmark(c: &mut Criterion) {
     let runtime = Builder::new_multi_thread().enable_all().build().unwrap();
     let path_dir = runtime.block_on(init_dir(DATA_DIR)).unwrap();

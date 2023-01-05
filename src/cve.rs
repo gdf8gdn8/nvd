@@ -33,7 +33,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use self::cve_api::{
+use crate::cve_api::{
     Configurations, CpeMatch, Cve, CveDataMeta, CveItem, CveItemBytes, Node, NvdCve,
 };
 use chrono::{Datelike, Local};
@@ -47,31 +47,9 @@ use tokio::{
     task::JoinHandle,
     time::{sleep, Duration},
 };
-use tracing_subscriber::fmt::{format::Writer, time::FormatTime};
 
-mod cve_api {
-    include!(concat!(env!("OUT_DIR"), "/cve.api.rs"));
-}
 pub static DATA_DIR: &str = "./data";
 
-// cargo run --bin cve
-#[allow(dead_code)]
-#[tokio::main(flavor = "multi_thread")]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    init_log();
-    let path_dir = init_dir(DATA_DIR).await?;
-    let _ = sync_cve(&path_dir).await?;
-    let _ = make_db(&path_dir).await?;
-    let db_list = load_db(&path_dir).await?;
-    log::info!("db_list len: {}", db_list.len());
-    let mut cpe23_uri_vec = Vec::new();
-    let line = "cpe:2.3:a:vmware:rabbitmq:3.9.10:*:*:*:*:*:*:*";
-    let cpe23_uri = Cpe23Uri::new(line);
-    cpe23_uri_vec.push(cpe23_uri);
-    log::info!("cpe23_uri: {}", cpe23_uri_list_to_string(&cpe23_uri_vec));
-    cpe_match(&cpe23_uri_vec, &db_list).await?;
-    Ok(())
-}
 impl NvdCve {
     #[allow(dead_code)]
     fn new(json: &serde_json::Value) -> NvdCve {
@@ -282,7 +260,7 @@ impl Cpe23Uri {
     }
 }
 
-fn cpe23_uri_list_to_string(cpe23_uri_list: &Vec<Cpe23Uri>) -> String {
+pub fn cpe23_uri_list_to_string(cpe23_uri_list: &Vec<Cpe23Uri>) -> String {
     let mut cpe23_uri_string_list: Vec<String> = Vec::new();
     for cpe23_uri in cpe23_uri_list {
         cpe23_uri_string_list.push(cpe23_uri.to_string());
@@ -695,77 +673,52 @@ pub async fn init_dir(data_dir: &str) -> Result<PathBuf, Box<dyn std::error::Err
     }
     Ok(path.to_path_buf())
 }
-pub fn init_log() {
-    struct LocalTimer;
-    impl FormatTime for LocalTimer {
-        fn format_time(&self, w: &mut Writer<'_>) -> std::fmt::Result {
-            write!(w, "{}", Local::now().format("%F %T%.3f"))
-        }
-    }
-    let format = tracing_subscriber::fmt::format()
-        .with_level(true)
-        .with_target(false)
-        .with_thread_ids(false)
-        .with_thread_names(false)
-        .with_timer(LocalTimer);
-    match tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
-        .with_writer(std::io::stdout)
-        .with_ansi(true)
-        .event_format(format)
-        .try_init()
-    {
-        Ok(_) => {
-            log::info!("log initialized");
-        }
-        Err(_) => {
-            log::info!("log has been initialized");
-        }
-    };
-}
+
 #[cfg(test)]
-mod tests {
+mod cve_tests {
 
-    use super::{cpe_match, init_dir, init_log, load_db, make_db, sync_cve, Cpe23Uri, DATA_DIR};
+    use crate::log::log_init;
 
-    // cargo test cve::tests::test_init_dir
+    use super::{cpe_match, init_dir, load_db, make_db, sync_cve, Cpe23Uri, DATA_DIR};
+
+    // cargo test cve::cve_tests::test_init_dir
     #[tokio::test]
     async fn test_init_dir() -> Result<(), Box<dyn std::error::Error>> {
-        init_log();
+        log_init();
         let path_dir = init_dir(DATA_DIR).await?;
         log::info!("dir {:?} initialized", path_dir);
         Ok(())
     }
-    // cargo test cve::tests::test_sync_cve
+    // cargo test cve::cve_tests::test_sync_cve
     #[tokio::test]
     async fn test_sync_cve() -> Result<(), Box<dyn std::error::Error>> {
-        init_log();
+        log_init();
         let path_dir = init_dir(DATA_DIR).await?;
         let _ = sync_cve(&path_dir).await?;
         Ok(())
     }
-    // cargo test cve::tests::test_make_db
+    // cargo test cve::cve_tests::test_make_db
     #[tokio::test(flavor = "multi_thread")]
     async fn test_make_db() -> Result<(), Box<dyn std::error::Error>> {
-        init_log();
+        log_init();
         let path_dir = init_dir(DATA_DIR).await?;
         let _ = make_db(&path_dir).await?;
         Ok(())
     }
-    // cargo test cve::tests::test_load_db
+    // cargo test cve::cve_tests::test_load_db
     #[tokio::test]
     async fn test_load_db() -> Result<(), Box<dyn std::error::Error>> {
-        init_log();
+        log_init();
         let path_dir = init_dir(DATA_DIR).await?;
         let db_list = load_db(&path_dir).await?;
         log::info!("db_list len: {}", db_list.len());
         Ok(())
     }
 
-    // cargo test cve::tests::test_cpe_match
+    // cargo test cve::cve_tests::test_cpe_match
     #[tokio::test(flavor = "multi_thread")]
     async fn test_cpe_match() -> Result<(), Box<dyn std::error::Error>> {
-        init_log();
+        log_init();
         let path_dir = init_dir(DATA_DIR).await?;
         let db_list = load_db(&path_dir).await?;
         log::info!("db_list len: {}", db_list.len());
@@ -778,12 +731,12 @@ mod tests {
         Ok(())
     }
 
-    // cargo test cve::tests::it_works
+    // cargo test cve::cve_tests::it_works
     #[test]
     fn it_works() {
         use tokio::runtime::Builder;
         let runtime = Builder::new_multi_thread().enable_all().build().unwrap();
-        init_log();
+        log_init();
         let path_dir = runtime.block_on(init_dir(DATA_DIR)).unwrap();
         let db_list = runtime.block_on(load_db(&path_dir)).unwrap();
         log::info!("{}", db_list.len());

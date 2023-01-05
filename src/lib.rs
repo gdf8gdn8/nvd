@@ -27,5 +27,9 @@
 //!     Ok(())
 //! }
 //! ```
-
+pub mod cpe;
 pub mod cve;
+pub mod log;
+pub mod cve_api {
+    include!(concat!(env!("OUT_DIR"), "/cve.api.rs"));
+}

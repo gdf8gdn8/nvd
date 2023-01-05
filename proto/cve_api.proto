@@ -40,3 +40,16 @@ message CpeMatch {
     optional string version_start_including = 4;
     optional string version_end_including = 5;
 }
+
+message Cpe23Dictionary {
+    repeated Cpe23 cpe23_list = 1;
+}
+
+message Cpe23 {
+    string cpe23_uri = 1;
+    string cpe23_title = 2;
+}
+
+message Cpe23Title {
+    map<string, string> cpe23_title_map = 1;
+}
