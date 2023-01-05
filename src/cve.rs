@@ -33,12 +33,13 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use self::cve_api::{
+use crate::cve_api::{
     Configurations, CpeMatch, Cve, CveDataMeta, CveItem, CveItemBytes, Node, NvdCve,
 };
 use chrono::{Datelike, Local};
 use flate2::{read::GzDecoder, write::GzEncoder, Compression};
 use futures::future::join_all;
+use nvd::init_log;
 use prost::Message;
 use sha2::{Digest, Sha256};
 use tokio::{
@@ -47,8 +48,6 @@ use tokio::{
     task::JoinHandle,
     time::{sleep, Duration},
 };
-use tracing_subscriber::fmt::{format::Writer, time::FormatTime};
-
 mod cve_api {
     include!(concat!(env!("OUT_DIR"), "/cve.api.rs"));
 }
@@ -695,34 +694,7 @@ pub async fn init_dir(data_dir: &str) -> Result<PathBuf, Box<dyn std::error::Err
     }
     Ok(path.to_path_buf())
 }
-pub fn init_log() {
-    struct LocalTimer;
-    impl FormatTime for LocalTimer {
-        fn format_time(&self, w: &mut Writer<'_>) -> std::fmt::Result {
-            write!(w, "{}", Local::now().format("%F %T%.3f"))
-        }
-    }
-    let format = tracing_subscriber::fmt::format()
-        .with_level(true)
-        .with_target(false)
-        .with_thread_ids(false)
-        .with_thread_names(false)
-        .with_timer(LocalTimer);
-    match tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
-        .with_writer(std::io::stdout)
-        .with_ansi(true)
-        .event_format(format)
-        .try_init()
-    {
-        Ok(_) => {
-            log::info!("log initialized");
-        }
-        Err(_) => {
-            log::info!("log has been initialized");
-        }
-    };
-}
+
 #[cfg(test)]
 mod tests {
 

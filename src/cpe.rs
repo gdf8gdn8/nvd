@@ -1,11 +1,25 @@
 use std::{
     fs::{self, File},
-    io::{BufReader, Write},
+    io::{BufReader, BufWriter, Write},
     path::Path,
 };
 
+use nvd::{
+    cve_api::{Cpe23, Cpe23Dictionary},
+    init_log,
+};
+use prost::Message;
 use xml::{reader::XmlEvent, EventReader};
 
+// cargo run --release --bin cpe
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    init_log();
+    make_cpe_dictionary().await;
+    Ok(())
+}
+
+#[allow(dead_code)]
 async fn download_cpe() -> Result<(), Box<dyn std::error::Error>> {
     let cpe_file_name = "official-cpe-dictionary_v2.3.xml.gz";
     let path = Path::new("./data");
@@ -23,15 +37,16 @@ async fn download_cpe() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn make_cpe_dictionary() {
-    let path_gz = Path::new("./data/official-cpe-dictionary_v2.3.xml.gz");
-    let file_gz = File::open(path_gz).unwrap();
-    let gz_decoder = flate2::read::GzDecoder::new(file_gz);
+    let path_xml_gz = Path::new("./data/official-cpe-dictionary_v2.3.xml.gz");
+    let file_xml_gz = File::open(path_xml_gz).unwrap();
+    let gz_decoder = flate2::read::GzDecoder::new(file_xml_gz);
     let buf_reader = BufReader::new(gz_decoder);
     let event_reader = EventReader::new(buf_reader);
     let mut find_title = false;
     let mut find_uri = false;
     let mut cpe23_title = String::new();
     let mut cpe23_uri = String::new();
+    let mut cpe_dictionary = Cpe23Dictionary::default();
     for event in event_reader {
         match event {
             Ok(XmlEvent::StartElement {
@@ -66,17 +81,27 @@ async fn make_cpe_dictionary() {
             _ => {}
         };
         if find_uri {
-            log::info!("{cpe23_uri}, {cpe23_title}");
+            let cpe23 = Cpe23 {
+                cpe23_uri: cpe23_uri.to_owned(),
+                cpe23_title: cpe23_title.to_owned(),
+            };
+            cpe_dictionary.cpe23_list.push(cpe23);
         }
     }
+    let path_proto_gz = "./data/cpe_dictionary.proto.gz";
+    let file_proto_gz = File::create(path_proto_gz).unwrap();
+    let buf_writer = BufWriter::new(file_proto_gz);
+    let mut gz_encoder = flate2::write::GzEncoder::new(buf_writer, flate2::Compression::default());
+    let mut buf: Vec<u8> = Vec::new();
+    cpe_dictionary.encode(&mut buf).unwrap();
+    gz_encoder.write_all(&buf).unwrap();
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cve::init_log;
 
-    // cargo test cpe::tests::test_download_cpe
+    // cargo test tests::test_download_cpe
     #[tokio::test]
     async fn test_download_cpe() {
         init_log();
@@ -84,7 +109,7 @@ mod tests {
         let _ = tokio::join!(future_download_cpe);
     }
 
-    // cargo test cpe::tests::test_it_works
+    // cargo test tests::test_it_works
     #[tokio::test]
     async fn test_it_works() {
         init_log();
