@@ -49,3 +49,7 @@ message Cpe23 {
     string cpe23_uri = 1;
     string cpe23_title = 2;
 }
+
+message Cpe23Title {
+    map<string, string> cpe23_title_map = 1;
+}

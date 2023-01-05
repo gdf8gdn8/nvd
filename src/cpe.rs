@@ -1,12 +1,12 @@
 use std::{
     fs::{self, File},
-    io::{BufReader, BufWriter, Write},
+    io::{BufReader, BufWriter, Read, Write},
     path::Path,
 };
 
-use flate2::{write::GzEncoder, Compression};
+use flate2::{read::GzDecoder, write::GzEncoder, Compression};
 use nvd::{
-    cve_api::{Cpe23, Cpe23Dictionary},
+    cve_api::{Cpe23, Cpe23Dictionary, Cpe23Title},
     init_log,
 };
 use prost::Message;
@@ -17,6 +17,7 @@ use xml::{reader::XmlEvent, EventReader};
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_log();
     make_cpe_dictionary().await;
+    make_cpe_title().await;
     Ok(())
 }
 
@@ -100,6 +101,51 @@ async fn make_cpe_dictionary() {
     gz_encoder.write_all(&buf).unwrap();
 }
 
+async fn make_cpe_title() {
+    let path_proto_gz = "./data/cpe_dictionary.proto.gz";
+    let file_proto_gz = File::open(path_proto_gz).unwrap();
+    let buf_reader = BufReader::new(file_proto_gz);
+    let gz_decoder = GzDecoder::new(buf_reader);
+    let mut buf_reader = BufReader::new(gz_decoder);
+    let mut buf = Vec::new();
+    buf_reader.read_to_end(&mut buf).unwrap();
+    let cpe23_dictionary: Cpe23Dictionary = prost::Message::decode(buf.as_slice()).unwrap();
+    let mut cpe23_title = Cpe23Title::default();
+    for cpe23 in cpe23_dictionary.cpe23_list {
+        // cpe:2.3:a:10web:slider:1.1.71:*:*:*:*:wordpress:*:*
+        let cpe23uri_vec: Vec<&str> = cpe23.cpe23_uri.split(":").collect();
+
+        // if !"*".eq(cpe23uri_vec[10]) || !"*".eq(cpe23uri_vec[11]) {
+        //     log::info!("{:?}", cpe23);
+        // }
+
+        // part:vendor:product
+        let key = format!(
+            "{}:{}:{}",
+            cpe23uri_vec[2], cpe23uri_vec[3], cpe23uri_vec[4]
+        );
+        let version = cpe23uri_vec[5];
+        let mut value = cpe23.cpe23_title;
+        if !"*".eq(version) {
+            // 抹掉version和update
+            let offset = value.find(&format!(" {}", version)).unwrap_or(value.len());
+            value.replace_range(offset..value.len(), "");
+        }
+        // if !"*".eq(cpe23uri_vec[10]) || !"*".eq(cpe23uri_vec[11]) {
+        //     log::info!("{key}--{value}");
+        // }
+        cpe23_title.cpe23_title_map.insert(key.to_owned(), value);
+    }
+    let path_proto_gz = "./data/cpe23_title.proto.gz";
+    let file_proto_gz = File::create(path_proto_gz).unwrap();
+    let buf_writer = BufWriter::new(file_proto_gz);
+    let mut gz_encoder = GzEncoder::new(buf_writer, Compression::default());
+    let mut buf: Vec<u8> = Vec::new();
+    cpe23_title.encode(&mut buf).unwrap();
+    drop(cpe23_title);
+    gz_encoder.write_all(&buf).unwrap();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -112,10 +158,17 @@ mod tests {
         let _ = tokio::join!(future_download_cpe);
     }
 
-    // cargo test tests::test_it_works
+    // cargo test tests::test_make_cpe_dictionary
     #[tokio::test]
-    async fn test_it_works() {
+    async fn test_make_cpe_dictionary() {
         init_log();
         make_cpe_dictionary().await;
+    }
+
+    // cargo test tests::test_make_cpe_title
+    #[tokio::test]
+    async fn test_make_cpe_title() {
+        init_log();
+        make_cpe_title().await;
     }
 }
