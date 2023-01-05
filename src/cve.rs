@@ -191,14 +191,21 @@ pub async fn cpe_match(
             for cve_items_bytes in nvdcve.cve_item_bytes_list {
                 let mut decoder = GzDecoder::new(&cve_items_bytes.cve_item_bytes[..]);
                 let mut buf = Vec::new();
-                decoder.read_to_end(&mut buf).unwrap();
-                let cve_item: CveItem = prost::Message::decode(buf.as_slice()).unwrap();
-                let cve_id = cve_item.cve.unwrap().cve_data_meta.unwrap().id;
-                for node in cve_item.configurations.unwrap().nodes {
-                    if match_node(&cpe23_uri_list, &node) {
-                        log::info!("matched :{}", cve_id);
+                match decoder.read_to_end(&mut buf) {
+                    Ok(_) => {
+                        let cve_item: CveItem = prost::Message::decode(buf.as_slice()).unwrap();
+                        let cve_id = cve_item.cve.unwrap().cve_data_meta.unwrap().id;
+                        for node in cve_item.configurations.unwrap().nodes {
+                            if match_node(&cpe23_uri_list, &node) {
+                                log::info!("matched :{}", cve_id);
+                            }
+                        }
                     }
-                }
+                    Err(err) => {
+                        log::error!("{}", err);
+                        log::info!("size: {}", cve_items_bytes.cve_item_bytes.len());
+                    }
+                };
             }
         });
         handle_list.push(handle);
@@ -520,7 +527,10 @@ pub async fn make_db(path_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error
     while let Some(entry) = entries.next_entry().await? {
         let path = entry.path();
         let file_name_json = &path.file_name().unwrap().to_str().unwrap();
-        if path.is_file() && file_name_json.ends_with(".json.gz") {
+        if path.is_file()
+            && file_name_json.starts_with("nvdcve-1.1-")
+            && file_name_json.ends_with(".json.gz")
+        {
             log::trace!("json file: {}", file_name_json);
             while handle_list.len() >= num_cpus {
                 for i in 0..handle_list.len() {
@@ -574,7 +584,10 @@ pub async fn load_db(path_dir: &PathBuf) -> Result<Vec<NvdCve>, Box<dyn std::err
     while let Some(entry) = entries.next_entry().await? {
         let path = entry.path();
         let file_name_json = &path.file_name().unwrap().to_str().unwrap();
-        if path.is_file() && file_name_json.ends_with(".proto.gz") {
+        if path.is_file()
+            && file_name_json.starts_with("nvdcve-1.1-")
+            && file_name_json.ends_with(".proto.gz")
+        {
             let file_gz = File::open(path).await?;
             let file_gz = file_gz.into_std().await;
             let gz_decoder = flate2::read::GzDecoder::new(file_gz);
@@ -675,13 +688,13 @@ pub async fn init_dir(data_dir: &str) -> Result<PathBuf, Box<dyn std::error::Err
 }
 
 #[cfg(test)]
-mod cve_tests {
+mod tests {
 
     use crate::log::log_init;
 
     use super::{cpe_match, init_dir, load_db, make_db, sync_cve, Cpe23Uri, DATA_DIR};
 
-    // cargo test cve::cve_tests::test_init_dir
+    // cargo test cve::tests::test_init_dir
     #[tokio::test]
     async fn test_init_dir() -> Result<(), Box<dyn std::error::Error>> {
         log_init();
@@ -689,7 +702,7 @@ mod cve_tests {
         log::info!("dir {:?} initialized", path_dir);
         Ok(())
     }
-    // cargo test cve::cve_tests::test_sync_cve
+    // cargo test cve::tests::test_sync_cve
     #[tokio::test]
     async fn test_sync_cve() -> Result<(), Box<dyn std::error::Error>> {
         log_init();
@@ -697,7 +710,7 @@ mod cve_tests {
         let _ = sync_cve(&path_dir).await?;
         Ok(())
     }
-    // cargo test cve::cve_tests::test_make_db
+    // cargo test cve::tests::test_make_db
     #[tokio::test(flavor = "multi_thread")]
     async fn test_make_db() -> Result<(), Box<dyn std::error::Error>> {
         log_init();
@@ -705,7 +718,7 @@ mod cve_tests {
         let _ = make_db(&path_dir).await?;
         Ok(())
     }
-    // cargo test cve::cve_tests::test_load_db
+    // cargo test cve::tests::test_load_db
     #[tokio::test]
     async fn test_load_db() -> Result<(), Box<dyn std::error::Error>> {
         log_init();
@@ -715,7 +728,7 @@ mod cve_tests {
         Ok(())
     }
 
-    // cargo test cve::cve_tests::test_cpe_match
+    // cargo test cve::tests::test_cpe_match
     #[tokio::test(flavor = "multi_thread")]
     async fn test_cpe_match() -> Result<(), Box<dyn std::error::Error>> {
         log_init();
@@ -731,7 +744,7 @@ mod cve_tests {
         Ok(())
     }
 
-    // cargo test cve::cve_tests::it_works
+    // cargo test cve::tests::it_works
     #[test]
     fn it_works() {
         use tokio::runtime::Builder;
