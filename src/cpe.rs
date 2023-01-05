@@ -5,24 +5,14 @@ use std::{
 };
 
 use flate2::{read::GzDecoder, write::GzEncoder, Compression};
-use nvd::{
-    cve_api::{Cpe23, Cpe23Dictionary, Cpe23Title},
-    init_log,
-};
+
 use prost::Message;
 use xml::{reader::XmlEvent, EventReader};
 
-// cargo run --release --bin cpe
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    init_log();
-    make_cpe_dictionary().await;
-    make_cpe_title().await;
-    Ok(())
-}
+use crate::cve_api::{Cpe23, Cpe23Dictionary, Cpe23Title};
 
 #[allow(dead_code)]
-async fn download_cpe() -> Result<(), Box<dyn std::error::Error>> {
+pub async fn download_cpe() -> Result<(), Box<dyn std::error::Error>> {
     let cpe_file_name = "official-cpe-dictionary_v2.3.xml.gz";
     let path = Path::new("./data");
     if !path.exists() {
@@ -38,7 +28,7 @@ async fn download_cpe() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn make_cpe_dictionary() {
+pub async fn make_cpe_dictionary() -> Result<(), Box<dyn std::error::Error>> {
     let path_xml_gz = Path::new("./data/official-cpe-dictionary_v2.3.xml.gz");
     let file_xml_gz = File::open(path_xml_gz).unwrap();
     let gz_decoder = flate2::read::GzDecoder::new(file_xml_gz);
@@ -99,9 +89,10 @@ async fn make_cpe_dictionary() {
     cpe_dictionary.encode(&mut buf).unwrap();
     drop(cpe_dictionary);
     gz_encoder.write_all(&buf).unwrap();
+    Ok(())
 }
 
-async fn make_cpe_title() {
+pub async fn make_cpe_title() -> Result<(), Box<dyn std::error::Error>> {
     let path_proto_gz = "./data/cpe_dictionary.proto.gz";
     let file_proto_gz = File::open(path_proto_gz).unwrap();
     let buf_reader = BufReader::new(file_proto_gz);
@@ -136,6 +127,7 @@ async fn make_cpe_title() {
         // }
         cpe23_title.cpe23_title_map.insert(key.to_owned(), value);
     }
+    log::info!("cpe23 title size: {}", cpe23_title.cpe23_title_map.len());
     let path_proto_gz = "./data/cpe23_title.proto.gz";
     let file_proto_gz = File::create(path_proto_gz).unwrap();
     let buf_writer = BufWriter::new(file_proto_gz);
@@ -144,31 +136,34 @@ async fn make_cpe_title() {
     cpe23_title.encode(&mut buf).unwrap();
     drop(cpe23_title);
     gz_encoder.write_all(&buf).unwrap();
+    Ok(())
 }
 
 #[cfg(test)]
-mod tests {
+mod cpe_tests {
+
+    use crate::log::log_init;
+
     use super::*;
 
-    // cargo test tests::test_download_cpe
+    // cargo test cpe_tests::test_download_cpe
     #[tokio::test]
-    async fn test_download_cpe() {
-        init_log();
-        let future_download_cpe = download_cpe();
-        let _ = tokio::join!(future_download_cpe);
+    async fn test_download_cpe() -> Result<(), Box<dyn std::error::Error>> {
+        log_init();
+        download_cpe().await
     }
 
-    // cargo test tests::test_make_cpe_dictionary
+    // cargo test cpe_tests::test_make_cpe_dictionary
     #[tokio::test]
-    async fn test_make_cpe_dictionary() {
-        init_log();
-        make_cpe_dictionary().await;
+    async fn test_make_cpe_dictionary() -> Result<(), Box<dyn std::error::Error>> {
+        log_init();
+        make_cpe_dictionary().await
     }
 
-    // cargo test tests::test_make_cpe_title
+    // cargo test cpe_tests::test_make_cpe_title
     #[tokio::test]
-    async fn test_make_cpe_title() {
-        init_log();
-        make_cpe_title().await;
+    async fn test_make_cpe_title() -> Result<(), Box<dyn std::error::Error>> {
+        log_init();
+        make_cpe_title().await
     }
 }

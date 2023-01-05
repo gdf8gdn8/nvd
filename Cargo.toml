@@ -10,14 +10,6 @@ readme = "README.md"
 repository = "https://github.com/zgj0315/nvd/"
 version = "0.1.11"
 
-[[bin]]
-name = "cve"
-path = "src/cve.rs"
-
-[[bin]]
-name = "cpe"
-path = "src/cpe.rs"
-
 [dependencies]
 chrono = "0.4"
 flate2 = "1.0"
