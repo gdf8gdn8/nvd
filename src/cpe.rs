@@ -4,6 +4,7 @@ use std::{
     path::Path,
 };
 
+use flate2::{write::GzEncoder, Compression};
 use nvd::{
     cve_api::{Cpe23, Cpe23Dictionary},
     init_log,
@@ -88,12 +89,14 @@ async fn make_cpe_dictionary() {
             cpe_dictionary.cpe23_list.push(cpe23);
         }
     }
+    log::info!("dictionary size: {}", cpe_dictionary.cpe23_list.len());
     let path_proto_gz = "./data/cpe_dictionary.proto.gz";
     let file_proto_gz = File::create(path_proto_gz).unwrap();
     let buf_writer = BufWriter::new(file_proto_gz);
-    let mut gz_encoder = flate2::write::GzEncoder::new(buf_writer, flate2::Compression::default());
+    let mut gz_encoder = GzEncoder::new(buf_writer, Compression::default());
     let mut buf: Vec<u8> = Vec::new();
     cpe_dictionary.encode(&mut buf).unwrap();
+    drop(cpe_dictionary);
     gz_encoder.write_all(&buf).unwrap();
 }
 
