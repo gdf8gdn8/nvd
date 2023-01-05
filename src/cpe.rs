@@ -140,27 +140,27 @@ pub async fn make_cpe_title() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[cfg(test)]
-mod cpe_tests {
+mod tests {
 
     use crate::log::log_init;
 
     use super::*;
 
-    // cargo test cpe_tests::test_download_cpe
+    // cargo test cve::tests::test_download_cpe
     #[tokio::test]
     async fn test_download_cpe() -> Result<(), Box<dyn std::error::Error>> {
         log_init();
         download_cpe().await
     }
 
-    // cargo test cpe_tests::test_make_cpe_dictionary
+    // cargo test cve::tests::test_make_cpe_dictionary
     #[tokio::test]
     async fn test_make_cpe_dictionary() -> Result<(), Box<dyn std::error::Error>> {
         log_init();
         make_cpe_dictionary().await
     }
 
-    // cargo test cpe_tests::test_make_cpe_title
+    // cargo test cve::tests::test_make_cpe_title
     #[tokio::test]
     async fn test_make_cpe_title() -> Result<(), Box<dyn std::error::Error>> {
         log_init();
