@@ -1,12 +1,12 @@
 use std::{env, process};
 
+use dev_util::log::log_init;
 use nvd::{
     cpe::{download_cpe, make_cpe_dictionary, make_cpe_title},
     cve::{
         cpe23_uri_list_to_string, cpe_match, init_dir, load_db, make_db, sync_cve, Cpe23Uri,
         DATA_DIR,
     },
-    log::log_init,
 };
 
 #[tokio::main]

@@ -19,7 +19,6 @@
 //!         cpe23_uri_list_to_string, cpe_match, init_dir, load_db, make_db, sync_cve, Cpe23Uri,
 //!         DATA_DIR,
 //!     },
-//!     log::log_init,
 //! };
 //!
 //! #[tokio::main]
@@ -68,7 +67,6 @@
 
 pub mod cpe;
 pub mod cve;
-pub mod log;
 pub mod cve_api {
     include!(concat!(env!("OUT_DIR"), "/cve.api.rs"));
 }

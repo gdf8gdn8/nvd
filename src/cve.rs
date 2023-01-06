@@ -659,8 +659,7 @@ pub async fn init_dir(data_dir: &str) -> Result<PathBuf, Box<dyn std::error::Err
 
 #[cfg(test)]
 mod tests {
-
-    use crate::log::log_init;
+    use dev_util::log::log_init;
 
     use super::{cpe_match, init_dir, load_db, make_db, sync_cve, Cpe23Uri, DATA_DIR};
 
