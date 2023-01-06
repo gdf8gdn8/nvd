@@ -141,8 +141,7 @@ pub async fn make_cpe_title() -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod tests {
-
-    use crate::log::log_init;
+    use dev_util::log::log_init;
 
     use super::*;
 
