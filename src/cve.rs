@@ -4,7 +4,9 @@ use std::{
 };
 
 use crate::cve_api::{
-    Configurations, CpeMatch, Cve, CveDataMeta, CveItem, CveItemBytes, Node, NvdCve,
+    BaseMetricV2, BaseMetricV3, Configurations, CpeMatch, Cve, CveDataMeta, CveItem, CveItemBytes,
+    CvssV2, CvssV3, Description, DescriptionData, Impact, Node, NvdCve, ProblemTypeData,
+    Problemtype,
 };
 use chrono::{Datelike, Local};
 use flate2::{read::GzDecoder, write::GzEncoder, Compression};
@@ -24,7 +26,7 @@ impl NvdCve {
     #[allow(dead_code)]
     fn new(json: &serde_json::Value) -> NvdCve {
         let cve_items = &json["CVE_Items"];
-        let cve_item_bytes_list = CveItem::new(&cve_items);
+        let cve_item_bytes_list = CveItem::new(cve_items);
         NvdCve {
             cve_item_bytes_list,
         }
@@ -40,9 +42,15 @@ impl CveItem {
             let cve = Some(Cve::new(cve));
             let configurations = &cve_item["configurations"];
             let configurations = Some(Configurations::new(configurations));
+            let impact = &cve_item["impact"];
+            let impact = Some(Impact::new(impact));
+            let last_modified_date = &cve_item["lastModifiedDate"];
             let cve_item = CveItem {
                 cve,
                 configurations,
+                impact,
+                last_modified_date: last_modified_date.to_string(),
+                published_date: cve_item["publishedDate"].to_string(),
             };
             // CveItem序列化成proto后，再gz压缩
             let mut buf: Vec<u8> = Vec::new();
@@ -58,12 +66,66 @@ impl CveItem {
         cve_item_bytes_list
     }
 }
-
+impl Problemtype {
+    fn new(json: &serde_json::Value) -> Problemtype {
+        let problemtype_data = if json["problemtype_data"].is_null() {
+            vec![]
+        } else {
+            json["problemtype_data"].as_array().unwrap().to_owned()
+        };
+        // log::info!("{:?}", json);
+        let problemtype_data = problemtype_data
+            .iter()
+            .map(ProblemTypeData::new)
+            .collect::<Vec<ProblemTypeData>>();
+        Problemtype { problemtype_data }
+    }
+}
+impl ProblemTypeData {
+    fn new(json: &serde_json::Value) -> ProblemTypeData {
+        let description = json["description"].as_array().unwrap().to_owned();
+        let description = description
+            .iter()
+            .map(|x| x["value"].as_str().unwrap().to_owned())
+            .collect::<Vec<String>>();
+        ProblemTypeData { description }
+    }
+}
+impl DescriptionData {
+    fn new(json: &serde_json::Value) -> DescriptionData {
+        let description = if json.is_null() {
+            vec![]
+        } else {
+            json.as_array().unwrap().to_owned()
+        };
+        let description = description
+            .iter()
+            .map(|x| x["value"].as_str().unwrap().to_owned())
+            .collect::<Vec<String>>();
+        // let value = json["value"].as_str().unwrap().to_owned();
+        DescriptionData { value: description }
+    }
+}
+impl Description {
+    fn new(json: &serde_json::Value) -> Description {
+        let description_data = &json["description_data"];
+        let description_data = Some(DescriptionData::new(description_data));
+        Description { description_data }
+    }
+}
 impl Cve {
     fn new(json: &serde_json::Value) -> Cve {
         let cve_data_meta = &json["CVE_data_meta"];
         let cve_data_meta = Some(CveDataMeta::new(cve_data_meta));
-        Cve { cve_data_meta }
+        let problemtype = &json["problemtype"];
+        let problemtype = Some(Problemtype::new(problemtype));
+        let description = &json["description"];
+        let description = Some(Description::new(description));
+        Cve {
+            cve_data_meta,
+            problemtype,
+            description: description.to_owned(),
+        }
     }
 }
 
@@ -81,7 +143,123 @@ impl Configurations {
         Configurations { nodes }
     }
 }
-
+impl BaseMetricV2 {
+    pub fn new(json: &serde_json::Value) -> BaseMetricV2 {
+        // log::info!("{:#?}", json);
+        let severity = &json["severity"].as_str().unwrap_or("UNKNOWN").to_owned();
+        let exploitability_score = json["exploitabilityScore"].as_f64().unwrap_or(0.0) as f32;
+        let impact_score = json["impactScore"].as_f64().unwrap_or(0.0) as f32;
+        let obtain_all_privilege = &json["obtainAllPrivilege"].as_bool().unwrap_or(false);
+        let obtain_user_privilege = &json["obtainUserPrivilege"].as_bool().unwrap_or(false);
+        let obtain_other_privilege = &json["obtainOtherPrivilege"].as_bool().unwrap_or(false);
+        let user_interaction_required = &json["userInteractionRequired"].as_bool().unwrap_or(false);
+        let cvvss = &json["cvss-V2"];
+        let cvss_v2 = Some(CvssV2::new(cvvss));
+        BaseMetricV2 {
+            severity: severity.clone(),
+            exploitability_score,
+            impact_score,
+            obtain_all_privilege: *obtain_all_privilege,
+            obtain_user_privilege: *obtain_user_privilege,
+            obtain_other_privilege: *obtain_other_privilege,
+            user_interaction_required: *user_interaction_required,
+            cvss_v2,
+        }
+    }
+}
+impl CvssV2 {
+    fn new(json: &serde_json::Value) -> CvssV2 {
+        let version = &json["version"].as_str().unwrap_or("").to_owned();
+        let vector_string = &json["vectorString"].as_str().unwrap_or("").to_owned();
+        let access_vector = &json["accessVector"].as_str().unwrap_or("").to_owned();
+        let access_complexity = &json["accessComplexity"].as_str().unwrap_or("").to_owned();
+        let confidentiality_impact = &json["confidentialityImpact"]
+            .as_str()
+            .unwrap_or("")
+            .to_owned();
+        let integrity_impact = &json["integrityImpact"].as_str().unwrap_or("").to_owned();
+        let availability_impact = &json["availabilityImpact"].as_str().unwrap_or("").to_owned();
+        let base_score = json["baseScore"].as_f64().unwrap_or(0.0) as f32;
+        CvssV2 {
+            version: version.clone(),
+            vector_string: vector_string.clone(),
+            access_vector: access_vector.clone(),
+            access_complexity: access_complexity.clone(),
+            confidentiality_impact: confidentiality_impact.clone(),
+            integrity_impact: integrity_impact.clone(),
+            availability_impact: availability_impact.clone(),
+            base_score,
+        }
+    }
+}
+impl CvssV3 {
+    fn new(json: &serde_json::Value) -> CvssV3 {
+        let version = &json["version"].as_str().unwrap_or("").to_owned();
+        let vector_string = &json["vectorString"].as_str().unwrap_or("").to_owned();
+        let attack_vector = &json["attackVector"].as_str().unwrap_or("").to_owned();
+        let attack_complexity = &json["attackComplexity"].as_str().unwrap_or("").to_owned();
+        let privileges_required = &json["privilegesRequired"].as_str().unwrap_or("").to_owned();
+        let user_interaction = &json["userInteraction"].as_str().unwrap_or("").to_owned();
+        let scope = &json["scope"].as_str().unwrap_or("").to_owned();
+        let confidentiality_impact = &json["confidentialityImpact"]
+            .as_str()
+            .unwrap_or("")
+            .to_owned();
+        let integrity_impact = &json["integrityImpact"].as_str().unwrap_or("").to_owned();
+        let availability_impact = &json["availabilityImpact"].as_str().unwrap_or("").to_owned();
+        let base_score = json["baseScore"].as_f64().unwrap_or(0.0) as f32;
+        let base_severity = &json["baseSeverity"].as_str().unwrap_or("").to_owned();
+        CvssV3 {
+            version: version.clone(),
+            vector_string: vector_string.clone(),
+            attack_vector: attack_vector.clone(),
+            attack_complexity: attack_complexity.clone(),
+            privileges_required: privileges_required.clone(),
+            user_interaction: user_interaction.clone(),
+            scope: scope.clone(),
+            confidentiality_impact: confidentiality_impact.clone(),
+            integrity_impact: integrity_impact.clone(),
+            availability_impact: availability_impact.clone(),
+            base_score,
+            base_severity: base_severity.clone(),
+        }
+    }
+}
+impl BaseMetricV3 {
+    fn new(json: &serde_json::Value) -> BaseMetricV3 {
+        // log::info!("{:#?}", json);
+        let exploitability_score = json["exploitabilityScore"].as_f64().unwrap_or(0.0) as f32;
+        let impact_score = json["impactScore"].as_f64().unwrap_or(0.0) as f32;
+        let cvss_v3 = &json["cvssV3"];
+        let cvss_v3 = Some(CvssV3::new(cvss_v3));
+        BaseMetricV3 {
+            cvss_v3,
+            exploitability_score,
+            impact_score,
+        }
+    }
+}
+impl Impact {
+    fn new(json: &serde_json::Value) -> Impact {
+        // log::info!("{:#?}", json);
+        let base_metric_v2 = &json["baseMetricV2"];
+        let base_metric_v2 = if base_metric_v2.is_null() {
+            None
+        } else {
+            Some(BaseMetricV2::new(base_metric_v2))
+        };
+        let base_metric_v3 = &json["baseMetricV3"];
+        let base_metric_v3 = if base_metric_v3.is_null() {
+            None
+        } else {
+            Some(BaseMetricV3::new(base_metric_v3))
+        };
+        Impact {
+            base_metric_v2,
+            base_metric_v3,
+        }
+    }
+}
 impl Node {
     fn new(json: &serde_json::Value) -> Vec<Node> {
         let json = json.as_array().unwrap();
@@ -164,10 +342,60 @@ pub async fn cpe_match(
                 match decoder.read_to_end(&mut buf) {
                     Ok(_) => {
                         let cve_item: CveItem = prost::Message::decode(buf.as_slice()).unwrap();
-                        let cve_id = cve_item.cve.unwrap().cve_data_meta.unwrap().id;
+                        let cve_id = &cve_item
+                            .cve
+                            .as_ref()
+                            .unwrap()
+                            .cve_data_meta
+                            .as_ref()
+                            .unwrap()
+                            .id;
+                        let severity: String = if let Some(impact) = &cve_item.impact {
+                            if let Some(_base_metric_v3) = &impact.base_metric_v3 {
+                                if let Some(cvss_v3) = &_base_metric_v3.cvss_v3 {
+                                    cvss_v3.base_severity.to_string()
+                                } else {
+                                    String::new()
+                                }
+                            } else if let Some(_base_metric_v2) = &impact.base_metric_v2 {
+                                _base_metric_v2.severity.to_string()
+                            } else {
+                                String::new()
+                            }
+                        } else {
+                            String::new()
+                        };
+                        let problem_type = if let Some(problemtype) =
+                            &cve_item.cve.as_ref().unwrap().problemtype
+                        {
+                            problemtype
+                                .problemtype_data
+                                .iter()
+                                .map(|x| x.description.join(","))
+                                .collect::<Vec<String>>()
+                                .join(",")
+                        } else {
+                            String::new()
+                        };
+                        let description = if let Some(description) =
+                            &cve_item.cve.as_ref().unwrap().description
+                        {
+                            description
+                                .description_data
+                                .iter()
+                                .map(|x| x.value.join(","))
+                                .collect::<Vec<String>>()
+                                .join(",")
+                        } else {
+                            String::new()
+                        };
                         for node in cve_item.configurations.unwrap().nodes {
                             if match_node(&cpe23_uri_list, &node) {
-                                log::info!("matched :{}", cve_id);
+                                // log::info!("{:#?}", &cve_item2);
+                                println!(
+                                    "matched :{:>20} severity: {:>10} problem_type: {} ",
+                                    cve_id, severity, problem_type
+                                );
                             }
                         }
                     }
@@ -248,13 +476,10 @@ pub fn cpe23_uri_list_to_string(cpe23_uri_list: &Vec<Cpe23Uri>) -> String {
 fn match_node(cpe23_uri_list: &Vec<Cpe23Uri>, node: &Node) -> bool {
     // log::info!("match {}", cpe23_uri_list_to_string(cpe23_uri_list));
     let operator = &node.operator;
-    let is_or = match operator.as_str() {
-        "OR" => true,
-        _ => false,
-    };
+    let is_or = matches!(operator.as_str(), "OR");
     // children存在是match_cpe为空，反之亦然
     let cpe_match_list = &node.cpe_match;
-    if cpe_match_list.len() > 0 {
+    if !cpe_match_list.is_empty() {
         let mut match_count = 0;
         for cpe_match in cpe_match_list {
             let cpe23_uri = &cpe_match.cpe23_uri;
@@ -275,40 +500,27 @@ fn match_node(cpe23_uri_list: &Vec<Cpe23Uri>, node: &Node) -> bool {
                     continue 'cpe23_uri_list;
                 }
                 // 规则中部位“*”的情况下，要严格匹配
-                if cpe23_uri.update != "*" {
-                    if cpe23_uri_input.update != cpe23_uri.update {
-                        continue 'cpe23_uri_list;
-                    }
+                if cpe23_uri.update != "*" && cpe23_uri_input.update != cpe23_uri.update {
+                    continue 'cpe23_uri_list;
                 }
-                if cpe23_uri.edition != "*" {
-                    if cpe23_uri_input.edition != cpe23_uri.edition {
-                        continue 'cpe23_uri_list;
-                    }
+                if cpe23_uri.edition != "*" && cpe23_uri_input.edition != cpe23_uri.edition {
+                    continue 'cpe23_uri_list;
                 }
-                if cpe23_uri.language != "*" {
-                    if cpe23_uri_input.language != cpe23_uri.language {
-                        continue 'cpe23_uri_list;
-                    }
+                if cpe23_uri.language != "*" && cpe23_uri_input.language != cpe23_uri.language {
+                    continue 'cpe23_uri_list;
                 }
-                if cpe23_uri.sw_edition != "*" {
-                    if cpe23_uri_input.sw_edition != cpe23_uri.sw_edition {
-                        continue 'cpe23_uri_list;
-                    }
+                if cpe23_uri.sw_edition != "*" && cpe23_uri_input.sw_edition != cpe23_uri.sw_edition
+                {
+                    continue 'cpe23_uri_list;
                 }
-                if cpe23_uri.target_sw != "*" {
-                    if cpe23_uri_input.target_sw != cpe23_uri.target_sw {
-                        continue 'cpe23_uri_list;
-                    }
+                if cpe23_uri.target_sw != "*" && cpe23_uri_input.target_sw != cpe23_uri.target_sw {
+                    continue 'cpe23_uri_list;
                 }
-                if cpe23_uri.target_hw != "*" {
-                    if cpe23_uri_input.target_hw != cpe23_uri.target_hw {
-                        continue 'cpe23_uri_list;
-                    }
+                if cpe23_uri.target_hw != "*" && cpe23_uri_input.target_hw != cpe23_uri.target_hw {
+                    continue 'cpe23_uri_list;
                 }
-                if cpe23_uri.other != "*" {
-                    if cpe23_uri_input.other != cpe23_uri.other {
-                        continue 'cpe23_uri_list;
-                    }
+                if cpe23_uri.other != "*" && cpe23_uri_input.other != cpe23_uri.other {
+                    continue 'cpe23_uri_list;
                 }
                 // 版本号为“-”，匹配所有版本
                 if cpe23_uri.version == "-" {
@@ -471,10 +683,10 @@ fn match_node(cpe23_uri_list: &Vec<Cpe23Uri>, node: &Node) -> bool {
     }
 
     let children = &node.children;
-    if children.len() > 0 {
+    if !children.is_empty() {
         let mut match_count = 0;
         for child in children {
-            if match_node(cpe23_uri_list, &child) {
+            if match_node(cpe23_uri_list, child) {
                 if is_or {
                     return true;
                 } else {
@@ -676,7 +888,7 @@ mod tests {
     async fn test_sync_cve() -> Result<(), Box<dyn std::error::Error>> {
         log_init();
         let path_dir = init_dir(DATA_DIR).await?;
-        let _ = sync_cve(&path_dir).await?;
+        sync_cve(&path_dir).await?;
         Ok(())
     }
     // cargo test cve::tests::test_make_db
@@ -684,7 +896,7 @@ mod tests {
     async fn test_make_db() -> Result<(), Box<dyn std::error::Error>> {
         log_init();
         let path_dir = init_dir(DATA_DIR).await?;
-        let _ = make_db(&path_dir).await?;
+        make_db(&path_dir).await?;
         Ok(())
     }
     // cargo test cve::tests::test_load_db

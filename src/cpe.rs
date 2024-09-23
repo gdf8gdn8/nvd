@@ -48,11 +48,9 @@ pub async fn make_cpe_dictionary() -> Result<(), Box<dyn std::error::Error>> {
             }) => {
                 if "title".eq(&name.local_name) {
                     for attribute in &attributes {
-                        if "lang".eq(&attribute.name.local_name) {
-                            if "en-US".eq(&attribute.value) {
-                                find_title = true;
-                                find_uri = false;
-                            }
+                        if "lang".eq(&attribute.name.local_name) && "en-US".eq(&attribute.value) {
+                            find_title = true;
+                            find_uri = false;
                         }
                     }
                 } else if "cpe23-item".eq(&name.local_name) {

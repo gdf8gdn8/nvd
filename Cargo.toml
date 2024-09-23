@@ -11,29 +11,49 @@ repository = "https://github.com/zgj0315/nvd/"
 version = "0.1.14"
 
 [dependencies]
-chrono = "0.4"
+chrono = { version = "0.4.38", features = ["serde"] }
+clap = { version = "4.5", features = [
+  "derive",
+  "env",
+  "unicode",
+  "wrap_help",
+], optional = true }
 dev_util = "0.1"
 flate2 = "1.0"
 futures = "0.3"
 hex = "0.4"
 log = "0.4"
 num_cpus = "1.14"
-prost = "0.11"
-reqwest = "0.11"
-serde = {version = "1.0", features = ["derive"]}
+prost = "0.13"
+reqwest = "0.12"
+serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
-tokio = {version = "1.23", features = ["macros", "rt", "rt-multi-thread", "fs"]}
+tokio = { version = "1.23", features = [
+  "macros",
+  "rt",
+  "rt-multi-thread",
+  "fs",
+] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
 xml-rs = "0.8"
+[profile.release]
+lto = true
+opt-level = 'z'
+codegen-units = 1
+strict = true
 
 [build-dependencies]
-prost-build = "0.11"
+prost-build = "0.13"
 
 [dev-dependencies]
-criterion = {version = "0.4", features = ["html_reports", "async_futures"]}
+criterion = { version = "0.5", features = ["html_reports", "async_futures"] }
 
 [[bench]]
 harness = false
 name = "cpe_match_benchmark"
+
+[features]
+default = ["clap"]
+clap = ["dep:clap"]

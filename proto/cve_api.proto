@@ -1,55 +1,102 @@
 syntax = "proto3";
 package cve.api;
 
-message NvdCve {
-    repeated CveItemBytes cve_item_bytes_list = 1;
-}
+message NvdCve { repeated CveItemBytes cve_item_bytes_list = 1; }
 
 message CveItem {
-    Cve cve = 1;
-    Configurations configurations = 2;
+  Cve cve = 1;
+  Configurations configurations = 2;
+  Impact impact = 3;
+  string published_date = 4;
+  string lastModifiedDate = 5;
 }
 
+message Description { DescriptionData description_data = 1; }
+message DescriptionData { repeated string value = 1; }
+message Problemtype { repeated ProblemTypeData problemtype_data = 1; }
+message ProblemTypeData { repeated string description = 1; }
+
+message ProblemDescription { string value = 1; }
 // CveItem序列化成proto后，再gz压缩
-message CveItemBytes {
-    bytes cve_item_bytes = 1;
-}
+message CveItemBytes { bytes cve_item_bytes = 1; }
 
 message Cve {
-    CveDataMeta cve_data_meta = 1;
+  CveDataMeta cve_data_meta = 1;
+  optional Problemtype problemtype = 2;
+  optional Description description = 3;
 }
 
-message CveDataMeta {
-    string id = 1;
-}
+message CveDataMeta { string id = 1; }
 
-message Configurations {
-    repeated Node nodes = 1;
-}
+message Configurations { repeated Node nodes = 1; }
 
 message Node {
-    string operator = 1;
-    repeated Node children = 2;
-    repeated CpeMatch cpe_match = 3;
+  string operator = 1;
+  repeated Node children = 2;
+  repeated CpeMatch cpe_match = 3;
 }
-
+message Impact {
+  optional BaseMetricV2 baseMetricV2 = 1;
+  optional BaseMetricV3 baseMetricV3 = 2;
+}
+message BaseMetricV2 {
+  string severity = 1;
+  float exploitabilityScore = 2;
+  float impactScore = 3;
+  bool obtainAllPrivilege = 4;
+  bool obtainUserPrivilege = 5;
+  bool obtainOtherPrivilege = 6;
+  bool userInteractionRequired = 7;
+  CvssV2 cvssV2 = 8;
+}
+message BaseMetricV3 {
+  CvssV3 cvssV3 = 1;
+  float exploitabilityScore = 2;
+  float impactScore = 3;
+}
+message CvssV2 {
+  string version = 1;
+  string vectorString = 2;
+  string accessVector = 3;
+  string accessComplexity = 4;
+  string confidentialityImpact = 5;
+  string integrityImpact = 6;
+  string availabilityImpact = 7;
+  float baseScore = 8;
+}
+message CvssV3 {
+  string version = 1;
+  string vectorString = 2;
+  string attackVector = 3;
+  string attackComplexity = 4;
+  string privilegesRequired = 5;
+  string userInteraction = 6;
+  string scope = 7;
+  string confidentialityImpact = 8;
+  string integrityImpact = 9;
+  string availabilityImpact = 10;
+  float baseScore = 11;
+  string baseSeverity = 12;
+}
+message CpeV2 {
+  string part = 1;
+  string vendor = 2;
+  string product = 3;
+  string version = 4;
+}
 message CpeMatch {
-    string cpe23_uri = 1;
-    optional string version_start_excluding = 2;
-    optional string version_end_excluding = 3;
-    optional string version_start_including = 4;
-    optional string version_end_including = 5;
+  string cpe23_uri = 1;
+  optional string version_start_excluding = 2;
+  optional string version_end_excluding = 3;
+  optional string version_start_including = 4;
+  optional string version_end_including = 5;
 }
 
-message Cpe23Dictionary {
-    repeated Cpe23 cpe23_list = 1;
-}
+message Cpe23Dictionary { repeated Cpe23 cpe23_list = 1; }
 
 message Cpe23 {
-    string cpe23_uri = 1;
-    string cpe23_title = 2;
+  string cpe23_uri = 1;
+  string cpe23_title = 2;
 }
 
-message Cpe23Title {
-    map<string, string> cpe23_title_map = 1;
-}
+message Cpe23Title { map<string, string> cpe23_title_map = 1; }
