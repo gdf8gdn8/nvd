@@ -10,6 +10,7 @@ use nvd::{
         cpe23_uri_list_to_string, cpe_match, init_dir, load_db, make_db, sync_cve, Cpe23Uri,
         DATA_DIR,
     },
+    format::DbFormat,
 };
 
 #[derive(Clone, Debug, Parser)]
@@ -20,30 +21,52 @@ struct Cli {
 }
 
 #[derive(Clone, Debug, Parser)]
+struct Cpe {
+    /// Enable verbose (DEBUG) logging
+    #[arg(short, long, default_value_t = false)]
+    verbose: bool,
+    /// Database serialisation format
+    #[arg(short, long, default_value = "protobuf")]
+    format: DbFormat,
+}
+
+#[derive(Clone, Debug, Parser)]
 enum Commands {
     Cve(Cve),
-    Cpe,
+    Cpe(Cpe),
 }
 
 #[derive(Clone, Debug, Parser)]
 struct Cve {
+    /// CPE 2.3 URI to match, e.g. `cpe:2.3:a:vmware:rabbitmq:3.9.10:*:*:*:*:*:*:*`
     cve: String,
+    /// Skip the sync step (don't download/verify JSON feeds)
     #[arg(long, default_value_t = false)]
     no_sync: bool,
+    /// Print severity statistics instead of individual results
     #[arg(long)]
     stat: bool,
+    /// Only show CVEs published on or after this date (YYYY-MM-DD)
     #[arg(long)]
     from_date: Option<String>,
+    /// Only show CVEs published on or before this date (YYYY-MM-DD)
     #[arg(long)]
     to_date: Option<String>,
+    /// Sort results by one of: `id`, `severity`, `date`
     #[arg(long)]
     sort: Option<String>,
+    /// Delete all cached database files before rebuilding
     #[arg(long, default_value_t = false)]
     rebuild: bool,
+    /// Enable verbose (DEBUG) logging
+    #[arg(short, long, default_value_t = false)]
+    verbose: bool,
+    /// Database serialisation format
+    #[arg(short, long, default_value = "protobuf")]
+    format: DbFormat,
 }
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    log_init_with_level(Level::WARN);
     let cli = Cli::parse();
     match &cli.command {
         Commands::Cve(args) => {
@@ -55,11 +78,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 args.to_date.as_deref(),
                 args.sort.as_deref(),
                 args.rebuild,
+                args.verbose,
+                args.format,
             )
             .await?;
         }
-        Commands::Cpe => {
-            cpe().await?;
+        Commands::Cpe(args) => {
+            cpe(args.verbose, args.format).await?;
         }
     }
     // if args.len() != 2 {
@@ -98,7 +123,14 @@ async fn cve(
     to_date: Option<&str>,
     sort: Option<&str>,
     rebuild: bool,
+    verbose: bool,
+    format: DbFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    if verbose {
+        log_init_with_level(Level::DEBUG);
+    } else {
+        log_init_with_level(Level::WARN);
+    }
     let pb = spinner("Initializing data directory…");
     let path_dir = init_dir(DATA_DIR).await?;
     if !no_sync {
@@ -110,15 +142,15 @@ async fn cve(
         let mut entries = tokio::fs::read_dir(&path_dir).await?;
         while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
-            if path.file_name().and_then(|n| n.to_str()).map_or(false, |n| n.ends_with(".proto.zst")) {
+            if path.file_name().and_then(|n| n.to_str()).map_or(false, |n| n.ends_with(".zst")) {
                 tokio::fs::remove_file(&path).await?;
             }
         }
     }
     pb.set_message("Building database…");
-    make_db(&path_dir).await?;
+    make_db(&path_dir, format).await?;
     pb.set_message("Loading database…");
-    let db_list = load_db(&path_dir).await?;
+    let db_list = load_db(&path_dir, format).await?;
     pb.finish_and_clear();
     log::info!("db_list len: {}", db_list.len());
     let mut cpe23_uri_vec = Vec::new();
@@ -140,8 +172,10 @@ async fn cve(
         results = results
             .into_iter()
             .filter(|r| {
-                let pub_date = NaiveDate::from_str(&r.published_date[..10])
-                    .ok()
+                let date_str = r.published_date.trim_matches('"');
+                let pub_date = date_str
+                    .get(..10)
+                    .and_then(|s| NaiveDate::from_str(s).ok())
                     .map(|d| d.and_hms_opt(0, 0, 0).unwrap());
                 let after = from.map_or(true, |f| pub_date.map_or(true, |p| p >= f));
                 let before = to.map_or(true, |t| pub_date.map_or(true, |p| p <= t));
@@ -166,16 +200,22 @@ async fn cve(
                 };
                 results.sort_by(|a, b| rank(&b.severity).cmp(&rank(&a.severity)));
             }
-            "date" => results.sort_by(|a, b| a.published_date.cmp(&b.published_date)),
-            _ => {}
+            "date" => results.sort_by(|a, b| {
+                a.published_date
+                    .trim_matches('"')
+                    .cmp(b.published_date.trim_matches('"'))
+            }),
+            _ => log::warn!("unknown sort field: {}", sort_field),
         }
     }
 
     // print
     for r in &results {
+        let date_str = r.published_date.trim_matches('"');
+        let date_short = date_str.get(..10).unwrap_or(date_str);
         println!(
-            "matched :{:>20} severity: {:>10} problem_type: {} description: {}",
-            r.id, r.severity, r.problem_type, r.description
+            "matched :{:>20} date: {} severity: {:>10} problem_type: {} description: {}",
+            r.id, date_short, r.severity, r.problem_type, r.description
         );
     }
 
@@ -197,7 +237,12 @@ async fn cve(
     Ok(())
 }
 
-async fn cpe() -> Result<(), Box<dyn std::error::Error>> {
+async fn cpe(verbose: bool, _format: DbFormat) -> Result<(), Box<dyn std::error::Error>> {
+    if verbose {
+        log_init_with_level(Level::DEBUG);
+    } else {
+        log_init_with_level(Level::WARN);
+    }
     let pb = spinner("Downloading CPE dictionary…");
     download_cpe().await?;
     pb.set_message("Building CPE dictionary…");

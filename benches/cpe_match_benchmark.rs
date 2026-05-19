@@ -1,13 +1,26 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use std::hint::black_box;
+
+use criterion::{criterion_group, criterion_main, Criterion};
 use nvd::cve::{cpe_match, init_dir, load_db, Cpe23Uri, DATA_DIR};
+use nvd::format::DbFormat;
 use tokio::runtime::Builder;
 
-pub fn criterion_benchmark(c: &mut Criterion) {
+fn bench_load_db(c: &mut Criterion) {
     let runtime = Builder::new_multi_thread().enable_all().build().unwrap();
     let path_dir = runtime.block_on(init_dir(DATA_DIR)).unwrap();
-    // runtime.block_on(sync_cve(&path_dir)).unwrap();
-    // runtime.block_on(make_db(&path_dir)).unwrap();
-    let db_list = runtime.block_on(load_db(&path_dir)).unwrap();
+
+    for format in &[DbFormat::Protobuf, DbFormat::MessagePack] {
+        let label = format!("load_db_{:?}", format);
+        c.bench_function(&label, |b| {
+            b.iter(|| runtime.block_on(load_db(black_box(&path_dir), *format)).unwrap())
+        });
+    }
+}
+
+fn bench_cpe_match(c: &mut Criterion) {
+    let runtime = Builder::new_multi_thread().enable_all().build().unwrap();
+    let path_dir = runtime.block_on(init_dir(DATA_DIR)).unwrap();
+    let db_list = runtime.block_on(load_db(&path_dir, DbFormat::Protobuf)).unwrap();
     let mut cpe23_uri_vec = Vec::new();
     let line = "cpe:2.3:a:vmware:rabbitmq:3.9.10:*:*:*:*:*:*:*";
     let cpe23_uri = Cpe23Uri::new(line);
@@ -20,5 +33,10 @@ pub fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 }
-criterion_group!(benches, criterion_benchmark);
+
+criterion_group!(
+    name = benches;
+    config = Criterion::default().sample_size(20).measurement_time(std::time::Duration::from_secs(30));
+    targets = bench_load_db, bench_cpe_match
+);
 criterion_main!(benches);

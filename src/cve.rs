@@ -4,6 +4,8 @@ use std::{
     sync::Arc,
 };
 
+use crate::format::DbFormat;
+
 use crate::cve_api::{
     BaseMetricV2, BaseMetricV3, Configurations, CpeMatch, Cve, CveDataMeta, CveItem, CveItemBytes,
     CvssV2, CvssV3, Description, DescriptionData, Impact, Node, NvdCve, ProblemTypeData,
@@ -32,6 +34,25 @@ impl NvdCve {
             cve_item_bytes_list,
         }
     }
+
+    fn get_items(&self) -> Vec<Vec<u8>> {
+        self.cve_item_bytes_list
+            .iter()
+            .map(|b| b.cve_item_bytes.clone())
+            .collect()
+    }
+
+    #[allow(dead_code)]
+    fn from_items(items: Vec<Vec<u8>>) -> NvdCve {
+        NvdCve {
+            cve_item_bytes_list: items
+                .into_iter()
+                .map(|b| CveItemBytes {
+                    cve_item_bytes: b,
+                })
+                .collect(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -50,6 +71,9 @@ pub struct Cpe23Uri {
 }
 
 impl Cpe23Uri {
+    /// Parse a CPE 2.3 URI string into its component fields.
+    ///
+    /// Missing or malformed fields default to `"*"`.
     pub fn new(cpe23uri: &str) -> Cpe23Uri {
         let parts: Vec<&str> = cpe23uri.split(":").collect();
         let get = |i: usize| parts.get(i).copied().unwrap_or("*").to_owned();
@@ -67,6 +91,7 @@ impl Cpe23Uri {
             other: get(12),
         }
     }
+    /// Reconstruct a CPE 2.3 URI string from the parsed component fields.
     pub fn to_string(&self) -> String {
         format!(
             "cpe:2.3:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}",
@@ -103,8 +128,8 @@ impl CveItem {
                 cve,
                 configurations,
                 impact,
-                last_modified_date: cve_val["lastModified"].to_string(),
-                published_date: cve_val["published"].to_string(),
+                last_modified_date: cve_val["lastModified"].as_str().unwrap_or("").to_owned(),
+                published_date: cve_val["published"].as_str().unwrap_or("").to_owned(),
             };
             let mut buf: Vec<u8> = Vec::new();
             if cve_item.encode(&mut buf).is_err() {
@@ -329,6 +354,10 @@ pub fn cpe23_uri_list_to_string(cpe23_uri_list: &Vec<Cpe23Uri>) -> String {
     cpe23_uri_string_list.sort();
     cpe23_uri_string_list.into_iter().collect::<String>()
 }
+/// Check whether the non-version CPE fields of `input` match `rule`.
+///
+/// `*` in a rule field acts as a wildcard (matches anything). The `part`,
+/// `vendor`, and `product` fields must match exactly.
 fn field_matches(input: &Cpe23Uri, rule: &Cpe23Uri) -> bool {
     input.part == rule.part
         && input.vendor == rule.vendor
@@ -342,6 +371,11 @@ fn field_matches(input: &Cpe23Uri, rule: &Cpe23Uri) -> bool {
         && (rule.other == "*" || input.other == rule.other)
 }
 
+/// Compare two dot-separated version strings numerically.
+///
+/// Splits each component on `.`, parses as `u32`, and compares
+/// element-by-element. Shorter sequences are treated as less-than
+/// longer ones when the common prefix is equal.
 fn cmp_ver(a: &str, b: &str) -> std::cmp::Ordering {
     let a_parts: Vec<u32> = a.split('.').filter_map(|s| s.parse().ok()).collect();
     let b_parts: Vec<u32> = b.split('.').filter_map(|s| s.parse().ok()).collect();
@@ -354,6 +388,11 @@ fn cmp_ver(a: &str, b: &str) -> std::cmp::Ordering {
     a_parts.len().cmp(&b_parts.len())
 }
 
+/// Check whether the input version matches the version rules in a CPE match.
+///
+/// Handles exact version, `*` wildcard, `-` (N/A), and numeric range
+/// matching (`versionStartIncluding`, `versionStartExcluding`,
+/// `versionEndIncluding`, `versionEndExcluding`).
 fn version_matches(input: &str, rule: &Cpe23Uri, cpe_match: &CpeMatch) -> bool {
     if rule.version == "-" {
         return true;
@@ -438,15 +477,26 @@ fn match_node(cpe23_uri_list: &Vec<Cpe23Uri>, node: &Node) -> bool {
     false
 }
 
+/// A single CPE → CVE match result.
 #[derive(Debug)]
 pub struct CveMatchResult {
+    /// CVE identifier, e.g. `"CVE-2023-46118"`.
     pub id: String,
+    /// Human-readable severity (`"LOW"`, `"MEDIUM"`, `"HIGH"`, `"CRITICAL"`, or empty).
     pub severity: String,
+    /// CWE problem type description.
     pub problem_type: String,
+    /// English description of the vulnerability.
     pub description: String,
+    /// ISO-8601 publication date string, e.g. `"2023-01-01T00:00:00.000"`.
     pub published_date: String,
 }
 
+/// Match a list of CPE 2.3 URIs against the loaded CVE database.
+///
+/// The function spawns one async task per `NvdCve` chunk, limited by
+/// `num_cpus`. Each task decodes the protobuf-encoded `CveItem` and checks
+/// every configuration node against the supplied CPE URIs.
 pub async fn cpe_match(
     cpe23_uri_list: &Vec<Cpe23Uri>,
     db_list: &[NvdCve],
@@ -535,7 +585,14 @@ pub async fn cpe_match(
     Ok(results)
 }
 
-pub async fn make_db(path_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+/// Convert all `.json.gz` files in `path_dir` to the chosen database format.
+///
+/// Skips files whose output (e.g. `.proto.zst`) already exists. Parallelism
+/// is capped at `num_cpus` concurrent conversions.
+pub async fn make_db(
+    path_dir: &PathBuf,
+    format: DbFormat,
+) -> Result<(), Box<dyn std::error::Error>> {
     let num_cpus = num_cpus::get_physical();
     let mut handle_list: Vec<JoinHandle<()>> = Vec::new();
     let mut entries = fs::read_dir(path_dir).await?;
@@ -551,8 +608,8 @@ pub async fn make_db(path_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error
         {
             continue;
         }
-        let file_name_proto = file_name_json.replace(".json.gz", ".proto.zst");
-        if path_dir.join(&file_name_proto).exists() {
+        let file_name_out = file_name_json.replace(".json.gz", format.ext());
+        if path_dir.join(&file_name_out).exists() {
             log::info!("{} already converted", file_name_json);
             continue;
         }
@@ -569,7 +626,7 @@ pub async fn make_db(path_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error
         let path_dir = path_dir.to_owned();
         let path_json = path.clone();
         let handle = tokio::spawn(async move {
-            let _ = json_to_proto(&path_json, &path_dir).await;
+            let _ = json_to_proto(&path_json, &path_dir, format).await;
         });
         handle_list.push(handle);
         log::trace!("make a new thread to work");
@@ -583,14 +640,15 @@ pub async fn make_db(path_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error
 async fn json_to_proto(
     path_json_gz: &Path,
     path_dir: &Path,
+    format: DbFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let file_name_json = match path_json_gz.file_name().and_then(|n| n.to_str()) {
         Some(name) => name,
         None => return Ok(()),
     };
-    let file_name_proto = file_name_json.replace(".json.gz", ".proto.zst");
-    let path_proto = path_dir.join(&file_name_proto);
-    log::info!("convert {} to {}", file_name_json, file_name_proto);
+    let file_name_out = file_name_json.replace(".json.gz", format.ext());
+    let path_out = path_dir.join(&file_name_out);
+    log::info!("convert {} to {}", file_name_json, file_name_out);
     let file_gz = File::open(&path_json_gz).await?;
     let file_gz = file_gz.into_std().await;
     let gz_decoder = flate2::read::GzDecoder::new(file_gz);
@@ -602,22 +660,26 @@ async fn json_to_proto(
         }
     };
     let nvd_cve = NvdCve::new(&json);
-    let mut buf: Vec<u8> = Vec::new();
-    if nvd_cve.encode(&mut buf).is_err() {
-        log::error!("failed to encode {}", file_name_json);
-        return Ok(());
-    }
-    let file_proto = File::create(path_proto).await?;
-    let file_proto = file_proto.into_std().await;
-    let mut encoder = zstd::stream::write::Encoder::new(file_proto, 0)?;
+    let items = nvd_cve.get_items();
+    let buf = format.encode_items(&items);
+    let file_out = File::create(path_out).await?;
+    let file_out = file_out.into_std().await;
+    let mut encoder = zstd::stream::write::Encoder::new(file_out, 0)?;
     encoder.write_all(&buf)?;
     encoder.finish()?;
     Ok(())
 }
 
-pub async fn load_db(path_dir: &PathBuf) -> Result<Vec<NvdCve>, Box<dyn std::error::Error>> {
+/// Load all database files in `path_dir` matching `format`'s extension.
+///
+/// Files are decompressed (zstd), decoded, and split into ~8 000-item
+/// `NvdCve` chunks for parallel matching.
+pub async fn load_db(
+    path_dir: &PathBuf,
+    format: DbFormat,
+) -> Result<Vec<NvdCve>, Box<dyn std::error::Error>> {
     let mut db_list: Vec<NvdCve> = Vec::new();
-    let mut nvdcve_vec = Vec::new();
+    let mut all_items: Vec<Vec<u8>> = Vec::new();
     let mut entries = fs::read_dir(path_dir).await?;
     while let Some(entry) = entries.next_entry().await? {
         let path = entry.path();
@@ -627,7 +689,7 @@ pub async fn load_db(path_dir: &PathBuf) -> Result<Vec<NvdCve>, Box<dyn std::err
         };
         if path.is_file()
             && file_name.starts_with("nvdcve-2.0-")
-            && file_name.ends_with(".proto.zst")
+            && file_name.ends_with(format.ext())
         {
             let file = File::open(path).await?;
             let file = file.into_std().await;
@@ -639,28 +701,27 @@ pub async fn load_db(path_dir: &PathBuf) -> Result<Vec<NvdCve>, Box<dyn std::err
                 log::error!("failed to read {}", file_name);
                 continue;
             }
-            match <NvdCve as prost::Message>::decode(buf.as_slice()) {
-                Ok(nvd_cve) => nvdcve_vec.push(nvd_cve),
+            match format.decode_items(&buf) {
+                Ok(items) => all_items.extend(items),
                 Err(e) => log::error!("failed to decode {}: {}", file_name, e),
             }
         }
     }
-    // 平均分配db
     let count_max = 8_000;
     let mut count = 0;
     let mut cve_item_bytes_list = Vec::new();
-    for nvdcve in nvdcve_vec {
-        for cve_item_bytes in nvdcve.cve_item_bytes_list {
-            cve_item_bytes_list.push(cve_item_bytes);
-            count += 1;
-            if count >= count_max {
-                let nvdcve = NvdCve {
-                    cve_item_bytes_list: cve_item_bytes_list.to_owned(),
-                };
-                db_list.push(nvdcve);
-                cve_item_bytes_list.clear();
-                count = 0;
-            }
+    for item in all_items {
+        cve_item_bytes_list.push(CveItemBytes {
+            cve_item_bytes: item,
+        });
+        count += 1;
+        if count >= count_max {
+            let nvdcve = NvdCve {
+                cve_item_bytes_list: cve_item_bytes_list.to_owned(),
+            };
+            db_list.push(nvdcve);
+            cve_item_bytes_list.clear();
+            count = 0;
         }
     }
     if count > 0 {
@@ -672,6 +733,10 @@ pub async fn load_db(path_dir: &PathBuf) -> Result<Vec<NvdCve>, Box<dyn std::err
     Ok(db_list)
 }
 
+/// Download (or verify) all NVD CVE `.json.gz` files for years 2002–current.
+///
+/// Each year's file is downloaded if the local SHA-256 does not match the
+/// latest published meta hash.
 pub async fn sync_cve(path_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let year_start = 2002;
     let year_now = Local::now().year();
@@ -727,6 +792,7 @@ async fn download(year: i32, path_dir: PathBuf) -> Result<(), Box<dyn std::error
     Ok(())
 }
 
+/// Ensure `data_dir` exists, creating it if necessary.
 pub async fn init_dir(data_dir: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let path = Path::new(data_dir);
     if !path.exists() {
@@ -743,6 +809,7 @@ mod tests {
     use dev_util::log::log_init;
 
     use super::{cpe_match, init_dir, load_db, make_db, sync_cve, Cpe23Uri, DATA_DIR};
+    use crate::format::DbFormat;
 
     // cargo test cve::tests::test_init_dir
     #[tokio::test]
@@ -765,7 +832,7 @@ mod tests {
     async fn test_make_db() -> Result<(), Box<dyn std::error::Error>> {
         log_init();
         let path_dir = init_dir(DATA_DIR).await?;
-        make_db(&path_dir).await?;
+        make_db(&path_dir, DbFormat::Protobuf).await?;
         Ok(())
     }
     // cargo test cve::tests::test_load_db
@@ -773,7 +840,7 @@ mod tests {
     async fn test_load_db() -> Result<(), Box<dyn std::error::Error>> {
         log_init();
         let path_dir = init_dir(DATA_DIR).await?;
-        let db_list = load_db(&path_dir).await?;
+        let db_list = load_db(&path_dir, DbFormat::Protobuf).await?;
         log::info!("db_list len: {}", db_list.len());
         Ok(())
     }
@@ -783,7 +850,7 @@ mod tests {
     async fn test_cpe_match() -> Result<(), Box<dyn std::error::Error>> {
         log_init();
         let path_dir = init_dir(DATA_DIR).await?;
-        let db_list = load_db(&path_dir).await?;
+        let db_list = load_db(&path_dir, DbFormat::Protobuf).await?;
         log::info!("db_list len: {}", db_list.len());
         let mut cpe23_uri_vec = Vec::new();
         let line = "cpe:2.3:a:vmware:rabbitmq:3.9.10:*:*:*:*:*:*:*";
@@ -798,6 +865,85 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn test_cmp_ver() {
+        use super::cmp_ver;
+        use std::cmp::Ordering;
+        assert_eq!(cmp_ver("3.9.10", "3.11.24"), Ordering::Less);
+        assert_eq!(cmp_ver("3.11.24", "3.9.10"), Ordering::Greater);
+        assert_eq!(cmp_ver("3.9.10", "3.9.10"), Ordering::Equal);
+        assert_eq!(cmp_ver("16.0.0", "15.5.7"), Ordering::Greater);
+        assert_eq!(cmp_ver("1.0.0", "1.0"), Ordering::Greater);
+        assert_eq!(cmp_ver("5.1", "5.1.0"), Ordering::Less);
+        assert_eq!(cmp_ver("0", "0.0.0"), Ordering::Less);
+    }
+
+    #[test]
+    fn test_field_matches() {
+        use super::{field_matches, Cpe23Uri};
+        let input = Cpe23Uri::new("cpe:2.3:a:vmware:rabbitmq:3.9.10:*:*:*:*:*:*:*");
+        let rule = Cpe23Uri::new("cpe:2.3:a:vmware:rabbitmq:*:*:*:*:*:*:*:*");
+        assert!(field_matches(&input, &rule));
+
+        let rule_diff_vendor = Cpe23Uri::new("cpe:2.3:a:apache:rabbitmq:*:*:*:*:*:*:*:*");
+        assert!(!field_matches(&input, &rule_diff_vendor));
+
+        let rule_sw = Cpe23Uri::new("cpe:2.3:a:gitlab:gitlab:*:*:*:*:community:*:*:*");
+        let input_sw = Cpe23Uri::new("cpe:2.3:a:gitlab:gitlab:*:*:*:*:enterprise:*:*:*");
+        assert!(!field_matches(&input_sw, &rule_sw));
+        let input_sw_match = Cpe23Uri::new("cpe:2.3:a:gitlab:gitlab:*:*:*:*:community:*:*:*");
+        assert!(field_matches(&input_sw_match, &rule_sw));
+    }
+
+    #[test]
+    fn test_version_matches() {
+        use super::{version_matches, Cpe23Uri};
+        use crate::cve_api::CpeMatch;
+
+        let rule = Cpe23Uri::new("cpe:2.3:a:vmware:rabbitmq:*:*:*:*:*:*:*:*");
+
+        let no_range = CpeMatch {
+            cpe23_uri: "cpe:2.3:a:vmware:rabbitmq:*:*:*:*:*:*:*:*".into(),
+            version_start_excluding: None,
+            version_end_excluding: None,
+            version_start_including: None,
+            version_end_including: None,
+        };
+        assert!(version_matches("3.9.10", &rule, &no_range));
+        assert!(version_matches("*", &rule, &no_range));
+
+        let end_excl = CpeMatch {
+            cpe23_uri: "cpe:2.3:a:vmware:rabbitmq:*:*:*:*:*:*:*:*".into(),
+            version_start_excluding: None,
+            version_end_excluding: Some("3.11.24".into()),
+            version_start_including: None,
+            version_end_including: None,
+        };
+        assert!(version_matches("3.9.10", &rule, &end_excl));
+        assert!(!version_matches("4.0.0", &rule, &end_excl));
+
+        let range = CpeMatch {
+            cpe23_uri: "cpe:2.3:a:gitlab:gitlab:*:*:*:*:*:*:*:*".into(),
+            version_start_including: Some("11.4.0".into()),
+            version_end_excluding: Some("15.5.7".into()),
+            version_start_excluding: None,
+            version_end_including: None,
+        };
+        assert!(version_matches("12.0.0", &rule, &range));
+        assert!(!version_matches("10.0.0", &rule, &range));
+        assert!(!version_matches("16.0.0", &rule, &range));
+        assert!(version_matches("11.4.0", &rule, &range));
+        assert!(version_matches("*", &rule, &range));
+
+        let exact_rule = Cpe23Uri::new("cpe:2.3:a:gitlab:gitlab:16.0.0:*:*:*:*:*:*:*");
+        assert!(version_matches("16.0.0", &exact_rule, &no_range));
+        assert!(!version_matches("15.0.0", &exact_rule, &no_range));
+        assert!(version_matches("*", &exact_rule, &no_range));
+
+        let na_rule = Cpe23Uri::new("cpe:2.3:a:vmware:rabbitmq:-:*:*:*:*:*:*:*");
+        assert!(version_matches("any", &na_rule, &no_range));
+    }
+
     // cargo test cve::tests::it_works
     #[test]
     fn it_works() {
@@ -805,7 +951,7 @@ mod tests {
         let runtime = Builder::new_multi_thread().enable_all().build().unwrap();
         log_init();
         let path_dir = runtime.block_on(init_dir(DATA_DIR)).unwrap();
-        let db_list = runtime.block_on(load_db(&path_dir)).unwrap();
+        let db_list = runtime.block_on(load_db(&path_dir, DbFormat::Protobuf)).unwrap();
         log::info!("{}", db_list.len());
         let mut cpe23_uri_vec = Vec::new();
         let line = "cpe:2.3:a:vmware:rabbitmq:3.9.10:*:*:*:*:*:*:*";
