@@ -4,6 +4,8 @@ use std::{
     sync::Arc,
 };
 
+use redb::ReadableTable;
+
 use crate::format::DbFormat;
 
 use crate::cve_api::{
@@ -587,12 +589,16 @@ pub async fn cpe_match(
 
 /// Convert all `.json.gz` files in `path_dir` to the chosen database format.
 ///
-/// Skips files whose output (e.g. `.proto.zst`) already exists. Parallelism
-/// is capped at `num_cpus` concurrent conversions.
+/// Skips files whose output already exists. Parallelism is capped at
+/// `num_cpus` concurrent conversions.  For `DbFormat::Redb`, all years
+/// are collected into a single database file.
 pub async fn make_db(
     path_dir: &PathBuf,
     format: DbFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    if format == DbFormat::Redb {
+        return make_db_redb(path_dir).await;
+    }
     let num_cpus = num_cpus::get_physical();
     let mut handle_list: Vec<JoinHandle<()>> = Vec::new();
     let mut entries = fs::read_dir(path_dir).await?;
@@ -664,9 +670,63 @@ async fn json_to_proto(
     let buf = format.encode_items(&items);
     let file_out = File::create(path_out).await?;
     let file_out = file_out.into_std().await;
-    let mut encoder = zstd::stream::write::Encoder::new(file_out, 0)?;
-    encoder.write_all(&buf)?;
-    encoder.finish()?;
+    if format.uses_zstd() {
+        let mut encoder = zstd::stream::write::Encoder::new(file_out, 0)?;
+        encoder.write_all(&buf)?;
+        encoder.finish()?;
+    } else {
+        use std::io::Write;
+        let mut f = file_out;
+        f.write_all(&buf)?;
+    }
+    Ok(())
+}
+
+/// Build a single redb database from all JSON files (all years in one file).
+async fn make_db_redb(path_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    let db_path = path_dir.join("nvdcve.redb");
+    if db_path.exists() {
+        log::info!("redb database already exists, skipping");
+        return Ok(());
+    }
+    let db = redb::Database::create(&db_path)?;
+    let txn = db.begin_write()?;
+    {
+        let table_def: redb::TableDefinition<u64, &[u8]> =
+            redb::TableDefinition::new("cve_items");
+        let mut table = txn.open_table(table_def)?;
+        let mut idx: u64 = 0;
+        let mut entries = fs::read_dir(path_dir).await?;
+        while let Some(entry) = entries.next_entry().await? {
+            let path = entry.path();
+            let file_name = match path.file_name().and_then(|n| n.to_str()) {
+                Some(name) => name.to_owned(),
+                None => continue,
+            };
+            if !path.is_file()
+                || !file_name.starts_with("nvdcve-2.0-")
+                || !file_name.ends_with(".json.gz")
+            {
+                continue;
+            }
+            log::info!("processing {} for redb", file_name);
+            let file_gz = std::fs::File::open(&path)?;
+            let gz_decoder = flate2::read::GzDecoder::new(file_gz);
+            let json: serde_json::Value = match serde_json::from_reader(gz_decoder) {
+                Ok(v) => v,
+                Err(e) => {
+                    log::error!("failed to parse {}: {}", file_name, e);
+                    continue;
+                }
+            };
+            let nvd_cve = NvdCve::new(&json);
+            for item in nvd_cve.get_items() {
+                table.insert(idx, item.as_slice())?;
+                idx += 1;
+            }
+        }
+    }
+    txn.commit()?;
     Ok(())
 }
 
@@ -678,6 +738,9 @@ pub async fn load_db(
     path_dir: &PathBuf,
     format: DbFormat,
 ) -> Result<Vec<NvdCve>, Box<dyn std::error::Error>> {
+    if format == DbFormat::Redb {
+        return load_db_redb(path_dir).await;
+    }
     let mut db_list: Vec<NvdCve> = Vec::new();
     let mut all_items: Vec<Vec<u8>> = Vec::new();
     let mut entries = fs::read_dir(path_dir).await?;
@@ -692,14 +755,21 @@ pub async fn load_db(
             && file_name.ends_with(format.ext())
         {
             let file = File::open(path).await?;
-            let file = file.into_std().await;
+            let mut file = file.into_std().await;
             let mut buf = Vec::new();
-            if zstd::stream::read::Decoder::new(file)
-                .and_then(|mut r| r.read_to_end(&mut buf))
-                .is_err()
-            {
-                log::error!("failed to read {}", file_name);
-                continue;
+            if format.uses_zstd() {
+                if zstd::stream::read::Decoder::new(file)
+                    .and_then(|mut r| r.read_to_end(&mut buf))
+                    .is_err()
+                {
+                    log::error!("failed to read {}", file_name);
+                    continue;
+                }
+            } else {
+                if file.read_to_end(&mut buf).is_err() {
+                    log::error!("failed to read {}", file_name);
+                    continue;
+                }
             }
             match format.decode_items(&buf) {
                 Ok(items) => all_items.extend(items),
@@ -707,6 +777,46 @@ pub async fn load_db(
             }
         }
     }
+    let count_max = 8_000;
+    let mut count = 0;
+    let mut cve_item_bytes_list = Vec::new();
+    for item in all_items {
+        cve_item_bytes_list.push(CveItemBytes {
+            cve_item_bytes: item,
+        });
+        count += 1;
+        if count >= count_max {
+            let nvdcve = NvdCve {
+                cve_item_bytes_list: cve_item_bytes_list.to_owned(),
+            };
+            db_list.push(nvdcve);
+            cve_item_bytes_list.clear();
+            count = 0;
+        }
+    }
+    if count > 0 {
+        let nvdcve = NvdCve {
+            cve_item_bytes_list,
+        };
+        db_list.push(nvdcve);
+    }
+    Ok(db_list)
+}
+
+/// Load all CVE items from a single redb database file.
+async fn load_db_redb(path_dir: &PathBuf) -> Result<Vec<NvdCve>, Box<dyn std::error::Error>> {
+    let db_path = path_dir.join("nvdcve.redb");
+    let db = redb::Database::open(&db_path)?;
+    let txn = db.begin_read()?;
+    let table_def: redb::TableDefinition<u64, &[u8]> =
+        redb::TableDefinition::new("cve_items");
+    let table = txn.open_table(table_def)?;
+    let mut all_items: Vec<Vec<u8>> = Vec::new();
+    for entry in table.iter()? {
+        let (_key, value) = entry?;
+        all_items.push(value.value().to_vec());
+    }
+    let mut db_list: Vec<NvdCve> = Vec::new();
     let count_max = 8_000;
     let mut count = 0;
     let mut cve_item_bytes_list = Vec::new();

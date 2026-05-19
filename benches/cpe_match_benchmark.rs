@@ -9,7 +9,12 @@ fn bench_load_db(c: &mut Criterion) {
     let runtime = Builder::new_multi_thread().enable_all().build().unwrap();
     let path_dir = runtime.block_on(init_dir(DATA_DIR)).unwrap();
 
-    for format in &[DbFormat::Protobuf, DbFormat::MessagePack] {
+    for format in &[
+        DbFormat::Protobuf,
+        DbFormat::MessagePack,
+        DbFormat::Rkyv,
+        DbFormat::Mmap,
+    ] {
         let label = format!("load_db_{:?}", format);
         c.bench_function(&label, |b| {
             b.iter(|| runtime.block_on(load_db(black_box(&path_dir), *format)).unwrap())

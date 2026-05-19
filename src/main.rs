@@ -140,9 +140,11 @@ async fn cve(
     if rebuild {
         pb.set_message("Removing old database…");
         let mut entries = tokio::fs::read_dir(&path_dir).await?;
+        let exts = DbFormat::all_extensions();
         while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
-            if path.file_name().and_then(|n| n.to_str()).map_or(false, |n| n.ends_with(".zst")) {
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if exts.iter().any(|e| name.ends_with(e)) {
                 tokio::fs::remove_file(&path).await?;
             }
         }
