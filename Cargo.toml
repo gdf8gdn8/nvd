@@ -45,6 +45,7 @@ zstd = { version = "0.13", default-features = false }
 memmap2 = "0.9"
 redb = "4"
 rkyv = { version = "0.8", features = ["bytecheck"] }
+turso = "0.6"
 
 [profile.release]
 lto = true

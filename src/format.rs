@@ -9,6 +9,7 @@
 //! * **CapnProto** — size-prefixed binary format (via `flatbuffers` builder)
 //! * **RkyvMmapRedb** — complete combination: rkyv-serialised batches in a
 //!   redb database, accessed via memory-mapped I/O (`.rmr`)
+//! * **Turso** — items stored in a libSQL (Turso) database (`.turso`)
 
 use crate::cve_api::{
     CveItemBytes,
@@ -37,6 +38,8 @@ pub enum DbFormat {
     /// Complete combination: rkyv-encoded batches in a redb database,
     /// accessible via memory-mapped I/O.  File extension: `.rmr`.
     RkyvMmapRedb,
+    /// Items stored in a libSQL (Turso) database.  File extension: `.turso`.
+    Turso,
 }
 
 impl DbFormat {
@@ -48,12 +51,13 @@ impl DbFormat {
             DbFormat::FlatBuffers => ".flatbuf.zst",
             DbFormat::CapnProto => ".capnp.zst",
             DbFormat::RkyvMmapRedb => ".rmr",
+            DbFormat::Turso => ".turso",
         }
     }
 
     /// Whether this format uses zstd compression.
     pub fn uses_zstd(&self) -> bool {
-        !matches!(self, DbFormat::RkyvMmapRedb)
+        !matches!(self, DbFormat::RkyvMmapRedb | DbFormat::Turso)
     }
 
     /// All known database file extensions, used by `--rebuild` to purge old files.
@@ -64,6 +68,7 @@ impl DbFormat {
             ".flatbuf.zst",
             ".capnp.zst",
             ".rmr",
+            ".turso",
         ]
     }
 
@@ -75,6 +80,7 @@ impl DbFormat {
             DbFormat::FlatBuffers => encode_flatbuf(items),
             DbFormat::CapnProto => encode_capnp(items),
             DbFormat::RkyvMmapRedb => encode_rmr(items),
+            DbFormat::Turso => encode_turso(items),
         }
     }
 
@@ -86,6 +92,7 @@ impl DbFormat {
             DbFormat::FlatBuffers => decode_flatbuf(data),
             DbFormat::CapnProto => decode_capnp(data),
             DbFormat::RkyvMmapRedb => decode_rmr(data),
+            DbFormat::Turso => decode_turso(data),
         }
     }
 }
@@ -252,6 +259,85 @@ fn decode_rmr(data: &[u8]) -> Result<Vec<Vec<u8>>, Box<dyn Error>> {
     Ok(all_items)
 }
 
+// ── Turso (libSQL via turso crate) ────────────────────────────────────
+
+/// Encode items into a libSQL database (Turso-compatible).
+///
+/// Each item is stored as a row in the `cve_items` table.  The file bytes
+/// are read back after the database is fully written, so they can be fed
+/// through the `encode_items`/`decode_items` byte-buffer interface.
+fn encode_turso(items: &[Vec<u8>]) -> Vec<u8> {
+    let dir = std::env::temp_dir();
+    let path = dir.join("nvd_turso_encode.tmp");
+    let _ = std::fs::remove_file(&path);
+
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        let db = turso::Builder::new_local(path.to_str().unwrap())
+            .build()
+            .await
+            .unwrap();
+        let conn = db.connect().unwrap();
+        let _ = conn.pragma_update("journal_mode", "DELETE").await.unwrap();
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS cve_items (id INTEGER PRIMARY KEY, data BLOB)",
+            (),
+        )
+        .await
+        .unwrap();
+        for (i, item) in items.iter().enumerate() {
+            conn.execute(
+                "INSERT INTO cve_items (id, data) VALUES (?1, ?2)",
+                (i as i64, item.as_slice()),
+            )
+            .await
+            .unwrap();
+        }
+        let _ = conn.pragma_update("wal_checkpoint", "TRUNCATE").await.unwrap();
+        let _ = conn.cacheflush();
+    });
+    let mut bytes = Vec::new();
+    std::fs::File::open(&path)
+        .unwrap()
+        .read_to_end(&mut bytes)
+        .unwrap();
+    let _ = std::fs::remove_file(&path);
+    bytes
+}
+
+/// Decode all items from a libSQL database byte blob compatible with
+/// Turso.
+///
+/// Writes the bytes to a temp file, opens it with the `turso` crate, reads
+/// all rows from `cve_items` ordered by id, and returns the items.
+fn decode_turso(data: &[u8]) -> Result<Vec<Vec<u8>>, Box<dyn Error>> {
+    let dir = std::env::temp_dir();
+    let path = dir.join("nvd_turso_decode.tmp");
+    let _ = std::fs::remove_file(&path);
+    std::fs::write(&path, data)?;
+
+    let rt = tokio::runtime::Runtime::new()?;
+    let items = rt.block_on(async {
+        let db = turso::Builder::new_local(path.to_str().unwrap())
+            .build()
+            .await?;
+        let conn = db.connect()?;
+        let mut stmt = conn.prepare("SELECT data FROM cve_items ORDER BY id").await?;
+        let mut rows = stmt.query(()).await?;
+        let mut items = Vec::new();
+        while let Some(row) = rows.next().await? {
+            let value = row.get_value(0)?;
+            if let turso::value::Value::Blob(data) = value {
+                items.push(data);
+            }
+        }
+        Ok::<_, Box<dyn Error>>(items)
+    })?;
+
+    let _ = std::fs::remove_file(&path);
+    Ok(items)
+}
+
 // ── Shared helpers ──────────────────────────────────────────────────
 
 /// Pack items into a single byte buffer: [num_items:u32, len1:u32, data1..., ...]
@@ -351,11 +437,17 @@ mod tests {
     }
 
     #[test]
+    fn test_turso_roundtrip() {
+        roundtrip(DbFormat::Turso);
+    }
+
+    #[test]
     fn test_all_extensions() {
         let exts = DbFormat::all_extensions();
         assert!(exts.contains(&".proto.zst"));
         assert!(exts.contains(&".rmr"));
-        assert_eq!(exts.len(), 5);
+        assert!(exts.contains(&".turso"));
+        assert_eq!(exts.len(), 6);
     }
 
     #[test]
@@ -365,5 +457,6 @@ mod tests {
         assert!(DbFormat::FlatBuffers.uses_zstd());
         assert!(DbFormat::CapnProto.uses_zstd());
         assert!(!DbFormat::RkyvMmapRedb.uses_zstd());
+        assert!(!DbFormat::Turso.uses_zstd());
     }
 }

@@ -622,14 +622,17 @@ pub async fn cpe_match(
 /// Convert all `.json.gz` files in `path_dir` to the chosen database format.
 ///
 /// Skips files whose output already exists. Parallelism is capped at
-/// `num_cpus` concurrent conversions.  For `DbFormat::RkyvMmapRedb`, all years
-/// are collected into a single database file.
+/// `num_cpus` concurrent conversions.  For `DbFormat::RkyvMmapRedb` and
+/// `DbFormat::Turso`, all years are collected into a single database file.
 pub async fn make_db(
     path_dir: &PathBuf,
     format: DbFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if format == DbFormat::RkyvMmapRedb {
         return make_db_rmr(path_dir).await;
+    }
+    if format == DbFormat::Turso {
+        return make_db_turso(path_dir).await;
     }
     let num_cpus = num_cpus::get_physical();
     let mut handle_list: Vec<JoinHandle<()>> = Vec::new();
@@ -786,6 +789,9 @@ pub async fn load_db(
     if format == DbFormat::RkyvMmapRedb {
         return load_db_rmr(path_dir).await;
     }
+    if format == DbFormat::Turso {
+        return load_db_turso(path_dir).await;
+    }
     let mut db_list: Vec<NvdCve> = Vec::new();
     let mut all_items: Vec<Vec<u8>> = Vec::new();
     let mut entries = fs::read_dir(path_dir).await?;
@@ -865,6 +871,106 @@ async fn load_db_rmr(path_dir: &PathBuf) -> Result<Vec<NvdCve>, Box<dyn std::err
         let batch = crate::format::decode_rkyv(value.value())?;
         all_items.extend(batch);
     }
+    let mut db_list: Vec<NvdCve> = Vec::new();
+    let count_max = 8_000;
+    let mut count = 0;
+    let mut cve_item_bytes_list = Vec::new();
+    for item in all_items {
+        cve_item_bytes_list.push(CveItemBytes {
+            cve_item_bytes: item,
+        });
+        count += 1;
+        if count >= count_max {
+            let nvdcve = NvdCve {
+                cve_item_bytes_list: cve_item_bytes_list.to_owned(),
+            };
+            db_list.push(nvdcve);
+            cve_item_bytes_list.clear();
+            count = 0;
+        }
+    }
+    if count > 0 {
+        let nvdcve = NvdCve {
+            cve_item_bytes_list,
+        };
+        db_list.push(nvdcve);
+    }
+    Ok(db_list)
+}
+
+/// Build a single Turso (libSQL) database from all JSON files.
+async fn make_db_turso(path_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    let db_path = path_dir.join("nvdcve.turso");
+    if db_path.exists() {
+        log::info!("turso database already exists, skipping");
+        return Ok(());
+    }
+    let db = turso::Builder::new_local(db_path.to_str().unwrap())
+        .build()
+        .await?;
+    let conn = db.connect()?;
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS cve_items (id INTEGER PRIMARY KEY, data BLOB)",
+        (),
+    )
+    .await?;
+
+    let mut entries = fs::read_dir(path_dir).await?;
+    let mut idx: i64 = 0;
+    while let Some(entry) = entries.next_entry().await? {
+        let path = entry.path();
+        let file_name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(name) => name.to_owned(),
+            None => continue,
+        };
+        if !path.is_file()
+            || !file_name.starts_with("nvdcve-2.0-")
+            || !file_name.ends_with(".json.gz")
+        {
+            continue;
+        }
+        log::info!("processing {} for turso", file_name);
+        let file_gz = std::fs::File::open(&path)?;
+        let gz_decoder = flate2::read::GzDecoder::new(file_gz);
+        let json: serde_json::Value = match serde_json::from_reader(gz_decoder) {
+            Ok(v) => v,
+            Err(e) => {
+                log::error!("failed to parse {}: {}", file_name, e);
+                continue;
+            }
+        };
+        let nvd_cve = NvdCve::new(&json);
+        for item in nvd_cve.get_items() {
+            conn.execute(
+                "INSERT INTO cve_items (id, data) VALUES (?1, ?2)",
+                (idx, item.as_slice()),
+            )
+            .await?;
+            idx += 1;
+        }
+    }
+    let _ = conn.pragma_update("wal_checkpoint", "TRUNCATE").await?;
+    let _ = conn.cacheflush()?;
+    Ok(())
+}
+
+/// Load all CVE items from a single `.turso` database (libSQL).
+async fn load_db_turso(path_dir: &PathBuf) -> Result<Vec<NvdCve>, Box<dyn std::error::Error>> {
+    let db_path = path_dir.join("nvdcve.turso");
+    let db = turso::Builder::new_local(db_path.to_str().unwrap())
+        .build()
+        .await?;
+    let conn = db.connect()?;
+    let mut stmt = conn.prepare("SELECT data FROM cve_items ORDER BY id").await?;
+    let mut rows = stmt.query(()).await?;
+    let mut all_items = Vec::new();
+    while let Some(row) = rows.next().await? {
+        let value = row.get_value(0)?;
+        if let turso::value::Value::Blob(data) = value {
+            all_items.push(data);
+        }
+    }
+
     let mut db_list: Vec<NvdCve> = Vec::new();
     let count_max = 8_000;
     let mut count = 0;
