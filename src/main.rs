@@ -25,6 +25,7 @@ use nvd::cve::{
 };
 use nvd::format::DbFormat;
 use std::str::FromStr;
+use tabled::settings::Style;
 
 #[derive(Clone, Debug, Parser)]
 #[command(version, about, long_about = None)]
@@ -75,8 +76,12 @@ struct Cve {
     #[arg(short, long, default_value_t = false)]
     verbose: bool,
     /// Database serialisation format
-    #[arg(short, long, default_value = "protobuf")]
+    // #[arg(short, long, default_value = "protobuf")]
+    #[arg(short, long, default_value = "turso")]
     format: DbFormat,
+    /// Display results in a formatted table
+    #[arg(long, default_value_t = false)]
+    table: bool,
 }
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -93,6 +98,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 args.rebuild,
                 args.verbose,
                 args.format,
+                args.table,
             )
             .await?;
         }
@@ -139,6 +145,7 @@ async fn cve(
     rebuild: bool,
     verbose: bool,
     format: DbFormat,
+    table: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if verbose {
         log_init_with_level(Level::DEBUG);
@@ -226,13 +233,33 @@ async fn cve(
     }
 
     // print
-    for r in &results {
-        let date_str = r.published_date.trim_matches('"');
-        let date_short = date_str.get(..10).unwrap_or(date_str);
-        println!(
-            "matched :{:>20} date: {} severity: {:>10} problem_type: {} description: {}",
-            r.id, date_short, r.severity, r.problem_type, r.description
-        );
+    if table {
+        use tabled::builder::Builder;
+        let mut builder = Builder::default();
+        builder.push_record(["ID", "Date", "Severity", "Problem Type", "Description"]);
+        for r in &results {
+            let date_str = r.published_date.trim_matches('"');
+            let date_short = date_str.get(..10).unwrap_or(date_str);
+            builder.push_record([
+                r.id.as_str(),
+                date_short,
+                r.severity.as_str(),
+                r.problem_type.as_str(),
+                r.description.as_str(),
+            ]);
+        }
+        let mut table = builder.build();
+        table.with(Style::rounded());
+        println!("{table}");
+    } else {
+        for r in &results {
+            let date_str = r.published_date.trim_matches('"');
+            let date_short = date_str.get(..10).unwrap_or(date_str);
+            println!(
+                "matched :{:>20} date: {} severity: {:>10} problem_type: {} description: {}",
+                r.id, date_short, r.severity, r.problem_type, r.description
+            );
+        }
     }
 
     // statistics
