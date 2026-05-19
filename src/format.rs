@@ -173,7 +173,6 @@ use rkyv::{
 };
 
 #[derive(Archive, Deserialize, Serialize)]
-#[archive(check_bytes)]
 struct RkyvContainer {
     items: Vec<Vec<u8>>,
 }
@@ -182,19 +181,15 @@ pub(crate) fn encode_rkyv(items: &[Vec<u8>]) -> Vec<u8> {
     let container = RkyvContainer {
         items: items.to_vec(),
     };
-    rkyv::to_bytes::<_, 256>(&container)
+    rkyv::to_bytes::<rkyv::rancor::Error>(&container)
         .unwrap()
         .as_ref()
         .to_vec()
 }
 
 pub(crate) fn decode_rkyv(data: &[u8]) -> Result<Vec<Vec<u8>>, Box<dyn Error>> {
-    let archived = rkyv::check_archived_root::<RkyvContainer>(data)?;
-    let mut out = Vec::with_capacity(archived.items.len());
-    for item in archived.items.iter() {
-        out.push(item.as_ref().to_vec());
-    }
-    Ok(out)
+    let container = rkyv::from_bytes::<RkyvContainer, rkyv::rancor::Error>(data)?;
+    Ok(container.items)
 }
 
 /// Encode items as rkyv archives stored in a redb database.

@@ -44,7 +44,7 @@ xml-rs = "1.0"
 zstd = { version = "0.13", default-features = false }
 memmap2 = "0.9"
 redb = "4"
-rkyv = { version = "0.7", features = ["validation"] }
+rkyv = { version = "0.8", features = ["bytecheck"] }
 
 [profile.release]
 lto = true
