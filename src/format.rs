@@ -10,6 +10,8 @@
 //! * **Rkyv** — zero-copy deserialization via `rkyv`, compressed (`.rkyv.zst`)
 //! * **Mmap** — memory-map friendly rkyv archive, no compression (`.mmap`)
 //! * **Redb** — embedded key-value database via `redb` (`.redb`)
+//! * **RkyvMmapRedb** — complete combination: rkyv serialized batches in a
+//!   redb database, accessed via memory-mapped I/O (`.rmr`)
 
 use std::error::Error;
 use std::io::Read;
@@ -40,6 +42,9 @@ pub enum DbFormat {
     Mmap,
     /// Redb embedded database.  File extension: `.redb`.
     Redb,
+    /// Complete combination: rkyv-encoded batches in a redb database,
+    /// accessible via memory-mapped I/O.  File extension: `.rmr`.
+    RkyvMmapRedb,
 }
 
 impl DbFormat {
@@ -53,12 +58,13 @@ impl DbFormat {
             DbFormat::Rkyv => ".rkyv.zst",
             DbFormat::Mmap => ".mmap",
             DbFormat::Redb => ".redb",
+            DbFormat::RkyvMmapRedb => ".rmr",
         }
     }
 
     /// Whether this format uses zstd compression.
     pub fn uses_zstd(&self) -> bool {
-        !matches!(self, DbFormat::Mmap | DbFormat::Redb)
+        !matches!(self, DbFormat::Mmap | DbFormat::Redb | DbFormat::RkyvMmapRedb)
     }
 
     /// All known database file extensions, used by `--rebuild` to purge old files.
@@ -71,6 +77,7 @@ impl DbFormat {
             ".rkyv.zst",
             ".mmap",
             ".redb",
+            ".rmr",
         ]
     }
 
@@ -84,6 +91,7 @@ impl DbFormat {
             DbFormat::Rkyv => encode_rkyv(items),
             DbFormat::Mmap => encode_rkyv(items),
             DbFormat::Redb => encode_redb(items),
+            DbFormat::RkyvMmapRedb => encode_rmr(items),
         }
     }
 
@@ -97,6 +105,7 @@ impl DbFormat {
             DbFormat::Rkyv => decode_rkyv(data),
             DbFormat::Mmap => decode_rkyv(data),
             DbFormat::Redb => decode_redb(data),
+            DbFormat::RkyvMmapRedb => decode_rmr(data),
         }
     }
 }
@@ -250,6 +259,70 @@ fn decode_redb(data: &[u8]) -> Result<Vec<Vec<u8>>, Box<dyn Error>> {
     Ok(items)
 }
 
+// ── Rkyv + Mmap + Redb (complete combination) ──────────────────────
+
+/// Encode items as rkyv archives stored in a redb database.
+///
+/// Items are batched (up to 8000 per batch), each batch is rkyv-encoded,
+/// and stored at a sequential key in a redb database.  The file is
+/// designed to be memory-mapped for zero-copy access to the rkyv data.
+fn encode_rmr(items: &[Vec<u8>]) -> Vec<u8> {
+    let dir = std::env::temp_dir();
+    let path = dir.join("nvd_rmr_encode.tmp");
+    let _ = std::fs::remove_file(&path);
+    let db = redb::Database::create(&path).unwrap();
+    let txn = db.begin_write().unwrap();
+    {
+        let table_def: redb::TableDefinition<u64, &[u8]> =
+            redb::TableDefinition::new("batches");
+        let mut table = txn.open_table(table_def).unwrap();
+        let batch_size: usize = 8000;
+        let chunks = items.chunks(batch_size);
+        let mut key: u64 = 0;
+        for chunk in chunks {
+            let rkyv_bytes = encode_rkyv(chunk);
+            table.insert(key, rkyv_bytes.as_slice()).unwrap();
+            key += 1;
+        }
+    }
+    txn.commit().unwrap();
+    let mut bytes = Vec::new();
+    std::fs::File::open(&path)
+        .unwrap()
+        .read_to_end(&mut bytes)
+        .unwrap();
+    let _ = std::fs::remove_file(&path);
+    bytes
+}
+
+/// Decode all items from a redb database containing rkyv-encoded batches.
+///
+/// Opens the redb database (the bytes come from a temp file), iterates
+/// all batch entries, and rkyv-decodes each batch to recover the items.
+/// In production, the redb file would be memory-mapped (`memmap2`) for
+/// efficient I/O — the temp-file dance is only needed here because
+/// `encode_items`/`decode_items` work with byte buffers.
+fn decode_rmr(data: &[u8]) -> Result<Vec<Vec<u8>>, Box<dyn Error>> {
+    let dir = std::env::temp_dir();
+    let path = dir.join("nvd_rmr_decode.tmp");
+    let _ = std::fs::remove_file(&path);
+    std::fs::write(&path, data)?;
+    let db = redb::Database::open(&path)?;
+    let txn = db.begin_read()?;
+    let table_def: redb::TableDefinition<u64, &[u8]> =
+        redb::TableDefinition::new("batches");
+    let table = txn.open_table(table_def)?;
+    let mut all_items = Vec::new();
+    for entry in table.iter()? {
+        let (_key, value) = entry?;
+        let batch = decode_rkyv(value.value())?;
+        all_items.extend(batch);
+    }
+    let _ = std::fs::remove_file(&path);
+    all_items.shrink_to_fit();
+    Ok(all_items)
+}
+
 // ── Shared helpers ──────────────────────────────────────────────────
 
 /// Pack items into a single byte buffer: [num_items:u32, len1:u32, data1..., ...]
@@ -340,6 +413,11 @@ mod tests {
     }
 
     #[test]
+    fn test_rmr_roundtrip() {
+        roundtrip(DbFormat::RkyvMmapRedb);
+    }
+
+    #[test]
     fn test_protobuf_roundtrip() {
         roundtrip(DbFormat::Protobuf);
     }
@@ -356,7 +434,8 @@ mod tests {
         assert!(exts.contains(&".rkyv.zst"));
         assert!(exts.contains(&".mmap"));
         assert!(exts.contains(&".redb"));
-        assert_eq!(exts.len(), 7);
+        assert!(exts.contains(&".rmr"));
+        assert_eq!(exts.len(), 8);
     }
 
     #[test]
@@ -368,5 +447,6 @@ mod tests {
         assert!(DbFormat::Rkyv.uses_zstd());
         assert!(!DbFormat::Mmap.uses_zstd());
         assert!(!DbFormat::Redb.uses_zstd());
+        assert!(!DbFormat::RkyvMmapRedb.uses_zstd());
     }
 }

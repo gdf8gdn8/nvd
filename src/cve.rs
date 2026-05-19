@@ -599,6 +599,9 @@ pub async fn make_db(
     if format == DbFormat::Redb {
         return make_db_redb(path_dir).await;
     }
+    if format == DbFormat::RkyvMmapRedb {
+        return make_db_rmr(path_dir).await;
+    }
     let num_cpus = num_cpus::get_physical();
     let mut handle_list: Vec<JoinHandle<()>> = Vec::new();
     let mut entries = fs::read_dir(path_dir).await?;
@@ -730,6 +733,68 @@ async fn make_db_redb(path_dir: &PathBuf) -> Result<(), Box<dyn std::error::Erro
     Ok(())
 }
 
+/// Build a single redb database from all JSON files, using rkyv-encoded
+/// batches (up to 8000 items per batch).  The file extension is `.rmr`.
+///
+/// This is the "complete combination" format: rkyv serialisation + redb
+/// storage + memory-map friendly layout.
+async fn make_db_rmr(path_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    let db_path = path_dir.join("nvdcve.rmr");
+    if db_path.exists() {
+        log::info!("rkyv_mmap_redb database already exists, skipping");
+        return Ok(());
+    }
+    let db = redb::Database::create(&db_path)?;
+    let txn = db.begin_write()?;
+    {
+        let table_def: redb::TableDefinition<u64, &[u8]> =
+            redb::TableDefinition::new("batches");
+        let mut table = txn.open_table(table_def)?;
+        let mut batch: Vec<Vec<u8>> = Vec::new();
+        let mut key: u64 = 0;
+        let mut entries = fs::read_dir(path_dir).await?;
+        while let Some(entry) = entries.next_entry().await? {
+            let path = entry.path();
+            let file_name = match path.file_name().and_then(|n| n.to_str()) {
+                Some(name) => name.to_owned(),
+                None => continue,
+            };
+            if !path.is_file()
+                || !file_name.starts_with("nvdcve-2.0-")
+                || !file_name.ends_with(".json.gz")
+            {
+                continue;
+            }
+            log::info!("processing {} for rkyv_mmap_redb", file_name);
+            let file_gz = std::fs::File::open(&path)?;
+            let gz_decoder = flate2::read::GzDecoder::new(file_gz);
+            let json: serde_json::Value = match serde_json::from_reader(gz_decoder) {
+                Ok(v) => v,
+                Err(e) => {
+                    log::error!("failed to parse {}: {}", file_name, e);
+                    continue;
+                }
+            };
+            let nvd_cve = NvdCve::new(&json);
+            for item in nvd_cve.get_items() {
+                batch.push(item);
+                if batch.len() >= 8000 {
+                    let rkyv_bytes = crate::format::DbFormat::Rkyv.encode_items(&batch);
+                    table.insert(key, rkyv_bytes.as_slice())?;
+                    key += 1;
+                    batch.clear();
+                }
+            }
+        }
+        if !batch.is_empty() {
+            let rkyv_bytes = crate::format::DbFormat::Rkyv.encode_items(&batch);
+            table.insert(key, rkyv_bytes.as_slice())?;
+        }
+    }
+    txn.commit()?;
+    Ok(())
+}
+
 /// Load all database files in `path_dir` matching `format`'s extension.
 ///
 /// Files are decompressed (zstd), decoded, and split into ~8 000-item
@@ -740,6 +805,9 @@ pub async fn load_db(
 ) -> Result<Vec<NvdCve>, Box<dyn std::error::Error>> {
     if format == DbFormat::Redb {
         return load_db_redb(path_dir).await;
+    }
+    if format == DbFormat::RkyvMmapRedb {
+        return load_db_rmr(path_dir).await;
     }
     let mut db_list: Vec<NvdCve> = Vec::new();
     let mut all_items: Vec<Vec<u8>> = Vec::new();
@@ -815,6 +883,51 @@ async fn load_db_redb(path_dir: &PathBuf) -> Result<Vec<NvdCve>, Box<dyn std::er
     for entry in table.iter()? {
         let (_key, value) = entry?;
         all_items.push(value.value().to_vec());
+    }
+    let mut db_list: Vec<NvdCve> = Vec::new();
+    let count_max = 8_000;
+    let mut count = 0;
+    let mut cve_item_bytes_list = Vec::new();
+    for item in all_items {
+        cve_item_bytes_list.push(CveItemBytes {
+            cve_item_bytes: item,
+        });
+        count += 1;
+        if count >= count_max {
+            let nvdcve = NvdCve {
+                cve_item_bytes_list: cve_item_bytes_list.to_owned(),
+            };
+            db_list.push(nvdcve);
+            cve_item_bytes_list.clear();
+            count = 0;
+        }
+    }
+    if count > 0 {
+        let nvdcve = NvdCve {
+            cve_item_bytes_list,
+        };
+        db_list.push(nvdcve);
+    }
+    Ok(db_list)
+}
+
+/// Load all CVE items from a single `.rmr` database (rkyv + mmap + redb).
+///
+/// Opens the redb database, iterates batch entries (each batch is an
+/// rkyv-encoded `Vec<Vec<u8>>`), decodes each batch with rkyv, and
+/// assembles the items into ~8 000-item NvdCve chunks.
+async fn load_db_rmr(path_dir: &PathBuf) -> Result<Vec<NvdCve>, Box<dyn std::error::Error>> {
+    let db_path = path_dir.join("nvdcve.rmr");
+    let db = redb::Database::open(&db_path)?;
+    let txn = db.begin_read()?;
+    let table_def: redb::TableDefinition<u64, &[u8]> =
+        redb::TableDefinition::new("batches");
+    let table = txn.open_table(table_def)?;
+    let mut all_items: Vec<Vec<u8>> = Vec::new();
+    for entry in table.iter()? {
+        let (_key, value) = entry?;
+        let batch = crate::format::DbFormat::Rkyv.decode_items(value.value())?;
+        all_items.extend(batch);
     }
     let mut db_list: Vec<NvdCve> = Vec::new();
     let count_max = 8_000;

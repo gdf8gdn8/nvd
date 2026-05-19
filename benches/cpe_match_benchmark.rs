@@ -14,6 +14,7 @@ fn bench_load_db(c: &mut Criterion) {
         DbFormat::MessagePack,
         DbFormat::Rkyv,
         DbFormat::Mmap,
+        DbFormat::RkyvMmapRedb,
     ] {
         let label = format!("load_db_{:?}", format);
         c.bench_function(&label, |b| {
