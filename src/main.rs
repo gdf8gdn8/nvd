@@ -25,7 +25,6 @@ use nvd::cve::{
 };
 use nvd::format::DbFormat;
 use std::str::FromStr;
-use tabled::settings::Style;
 
 #[derive(Clone, Debug, Parser)]
 #[command(version, about, long_about = None)]
@@ -234,23 +233,7 @@ async fn cve(
 
     // print
     if table {
-        use tabled::builder::Builder;
-        let mut builder = Builder::default();
-        builder.push_record(["ID", "Date", "Severity", "Problem Type", "Description"]);
-        for r in &results {
-            let date_str = r.published_date.trim_matches('"');
-            let date_short = date_str.get(..10).unwrap_or(date_str);
-            builder.push_record([
-                r.id.as_str(),
-                date_short,
-                r.severity.as_str(),
-                r.problem_type.as_str(),
-                r.description.as_str(),
-            ]);
-        }
-        let mut table = builder.build();
-        table.with(Style::rounded());
-        println!("{table}");
+        nvd::tui::run_tui(&results)?;
     } else {
         for r in &results {
             let date_str = r.published_date.trim_matches('"');

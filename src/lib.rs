@@ -69,6 +69,7 @@
 pub mod cpe;
 pub mod cve;
 pub mod format;
+pub mod tui;
 pub mod cve_api {
     include!(concat!(env!("OUT_DIR"), "/cve.api.rs"));
 }
