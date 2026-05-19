@@ -1,19 +1,42 @@
-use crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind},
-    execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
-};
-use ratatui::{
-    backend::CrosstermBackend,
-    layout::{Constraint, Layout},
-    style::{Color, Modifier, Style},
-    text::Span,
-    widgets::{Block, Borders, Cell, Row, Table, TableState, Paragraph},
-    Terminal,
-};
-use std::io::{self, Stdout};
-
 use crate::cve::CveMatchResult;
+use crossterm::event::{
+    self,
+    Event,
+    KeyCode,
+    KeyEventKind,
+};
+use crossterm::execute;
+use crossterm::terminal::{
+    disable_raw_mode,
+    enable_raw_mode,
+    EnterAlternateScreen,
+    LeaveAlternateScreen,
+};
+use ratatui::backend::CrosstermBackend;
+use ratatui::layout::{
+    Constraint,
+    Layout,
+};
+use ratatui::style::{
+    Color,
+    Modifier,
+    Style,
+};
+use ratatui::text::Span;
+use ratatui::widgets::{
+    Block,
+    Borders,
+    Cell,
+    Paragraph,
+    Row,
+    Table,
+    TableState,
+};
+use ratatui::Terminal;
+use std::io::{
+    self,
+    Stdout,
+};
 
 type TuiTerminal = Terminal<CrosstermBackend<Stdout>>;
 
@@ -94,13 +117,15 @@ fn run_app(
             .split(area);
 
             let title = Paragraph::new("CVE Match Results")
-                .style(Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD))
+                .style(
+                    Style::default()
+                        .fg(Color::Blue)
+                        .add_modifier(Modifier::BOLD),
+                )
                 .alignment(ratatui::layout::Alignment::Center);
             f.render_widget(title, chunks[0]);
 
-            let selected_style = Style::default()
-                .fg(Color::Black)
-                .bg(Color::LightBlue);
+            let selected_style = Style::default().fg(Color::Black).bg(Color::LightBlue);
 
             let rows: Vec<Row> = results.iter().map(style_row).collect();
             let widths = [
@@ -124,8 +149,7 @@ fn run_app(
                 state.selected().map_or(0, |i| i + 1),
                 results.len()
             );
-            let status_bar = Paragraph::new(status)
-                .style(Style::default().fg(Color::Green));
+            let status_bar = Paragraph::new(status).style(Style::default().fg(Color::Green));
             f.render_widget(status_bar, chunks[2]);
         })?;
 
@@ -134,9 +158,9 @@ fn run_app(
                 match key.code {
                     KeyCode::Char('q') => return Ok(()),
                     KeyCode::Down | KeyCode::Char('j') => {
-                        let i = state.selected().map_or(0, |i| {
-                            (i + 1).min(results.len().saturating_sub(1))
-                        });
+                        let i = state
+                            .selected()
+                            .map_or(0, |i| (i + 1).min(results.len().saturating_sub(1)));
                         state.select(Some(i));
                     }
                     KeyCode::Up | KeyCode::Char('k') => {
