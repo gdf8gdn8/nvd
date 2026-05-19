@@ -40,8 +40,8 @@ tokio = { version = "1.23", features = [
 ] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
-ratatui = "0.29"
-crossterm = "0.28"
+ratatui = "0.30"
+crossterm = "0.29"
 xml-rs = "1.0"
 zstd = { version = "0.13", default-features = false }
 memmap2 = "0.9"
