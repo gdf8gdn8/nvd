@@ -10,13 +10,14 @@
 //! * **RkyvMmapRedb** — complete combination: rkyv-serialised batches in a
 //!   redb database, accessed via memory-mapped I/O (`.rmr`)
 
-use std::error::Error;
-use std::io::Read;
-
+use crate::cve_api::{
+    CveItemBytes,
+    NvdCve,
+};
 use prost::Message;
 use redb::ReadableTable;
-
-use crate::cve_api::{CveItemBytes, NvdCve};
+use std::error::Error;
+use std::io::Read;
 
 /// Supported database serialisation format.
 ///
@@ -57,7 +58,13 @@ impl DbFormat {
 
     /// All known database file extensions, used by `--rebuild` to purge old files.
     pub fn all_extensions() -> &'static [&'static str] {
-        &[".proto.zst", ".msgpack.zst", ".flatbuf.zst", ".capnp.zst", ".rmr"]
+        &[
+            ".proto.zst",
+            ".msgpack.zst",
+            ".flatbuf.zst",
+            ".capnp.zst",
+            ".rmr",
+        ]
     }
 
     /// Serialise a list of CVE item byte blobs into a single byte buffer.
@@ -159,7 +166,11 @@ fn decode_capnp(data: &[u8]) -> Result<Vec<Vec<u8>>, Box<dyn Error>> {
 
 // ── Rkyv Mmap Redb (complete combination) ──────────────────────────────
 
-use rkyv::{Archive, Deserialize, Serialize};
+use rkyv::{
+    Archive,
+    Deserialize,
+    Serialize,
+};
 
 #[derive(Archive, Deserialize, Serialize)]
 #[archive(check_bytes)]
@@ -198,8 +209,7 @@ fn encode_rmr(items: &[Vec<u8>]) -> Vec<u8> {
     let db = redb::Database::create(&path).unwrap();
     let txn = db.begin_write().unwrap();
     {
-        let table_def: redb::TableDefinition<u64, &[u8]> =
-            redb::TableDefinition::new("batches");
+        let table_def: redb::TableDefinition<u64, &[u8]> = redb::TableDefinition::new("batches");
         let mut table = txn.open_table(table_def).unwrap();
         let batch_size: usize = 8000;
         let chunks = items.chunks(batch_size);
@@ -234,8 +244,7 @@ fn decode_rmr(data: &[u8]) -> Result<Vec<Vec<u8>>, Box<dyn Error>> {
     std::fs::write(&path, data)?;
     let db = redb::Database::open(&path)?;
     let txn = db.begin_read()?;
-    let table_def: redb::TableDefinition<u64, &[u8]> =
-        redb::TableDefinition::new("batches");
+    let table_def: redb::TableDefinition<u64, &[u8]> = redb::TableDefinition::new("batches");
     let table = txn.open_table(table_def)?;
     let mut all_items = Vec::new();
     for entry in table.iter()? {
@@ -285,22 +294,25 @@ fn unpack_items(data: &[u8]) -> Result<Vec<Vec<u8>>, Box<dyn Error>> {
 }
 
 /// Extract a byte vector from a flatbuffer that has a vector as root.
-/// Layout: [vector_data...][root_uoffset: u32 LE]
+///
+/// `FlatBufferBuilder::finished_data()` places the root uoffset at the
+/// *beginning* of the returned slice.  Layout:
+///
+/// ```text
+/// [root_uoffset: u32 LE][vector_len: u32 LE][vector_data...]
+/// ```
 fn extract_vector_from_flatbuffer(data: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
     if data.len() < 8 {
         return Err("flatbuffer data too short".into());
     }
-    let len = data.len();
-    let root_offset_bytes: [u8; 4] = data[len - 4..].try_into()?;
-    let root_uoffset = u32::from_le_bytes(root_offset_bytes) as usize;
-    let vector_start = len - 4 - root_uoffset;
-    if vector_start + 4 > len {
+    let root_uoffset = u32::from_le_bytes(data[0..4].try_into()?) as usize;
+    let vector_start = root_uoffset;
+    if vector_start + 4 > data.len() {
         return Err("invalid flatbuffer root offset".into());
     }
-    let vec_len_bytes: [u8; 4] = data[vector_start..vector_start + 4].try_into()?;
-    let packed_len = u32::from_le_bytes(vec_len_bytes) as usize;
+    let packed_len = u32::from_le_bytes(data[vector_start..vector_start + 4].try_into()?) as usize;
     let packed_start = vector_start + 4;
-    if packed_start + packed_len > len {
+    if packed_start + packed_len > data.len() {
         return Err("invalid flatbuffer vector length".into());
     }
     Ok(data[packed_start..packed_start + packed_len].to_vec())
@@ -311,12 +323,8 @@ mod tests {
     use crate::format::DbFormat;
 
     fn roundtrip(format: DbFormat) {
-        let items: Vec<Vec<u8>> = vec![
-            b"hello".to_vec(),
-            b"world".to_vec(),
-            vec![0u8; 256],
-            vec![],
-        ];
+        let items: Vec<Vec<u8>> =
+            vec![b"hello".to_vec(), b"world".to_vec(), vec![0u8; 256], vec![]];
         let encoded = format.encode_items(&items);
         let decoded = format.decode_items(&encoded).unwrap();
         assert_eq!(items, decoded, "roundtrip failed for {:?}", format);
@@ -325,6 +333,16 @@ mod tests {
     #[test]
     fn test_rmr_roundtrip() {
         roundtrip(DbFormat::RkyvMmapRedb);
+    }
+
+    #[test]
+    fn test_flatbuf_roundtrip() {
+        roundtrip(DbFormat::FlatBuffers);
+    }
+
+    #[test]
+    fn test_capnp_roundtrip() {
+        roundtrip(DbFormat::CapnProto);
     }
 
     #[test]

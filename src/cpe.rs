@@ -1,15 +1,21 @@
-use std::{
-    fs::{self, File},
-    io::{BufReader, Read, Write},
-    path::Path,
+use crate::cve_api::{
+    Cpe23,
+    Cpe23Dictionary,
+    Cpe23Title,
 };
-
-
-
 use prost::Message;
-use xml::{reader::XmlEvent, EventReader};
-
-use crate::cve_api::{Cpe23, Cpe23Dictionary, Cpe23Title};
+use std::fs::{
+    self,
+    File,
+};
+use std::io::{
+    BufReader,
+    Read,
+    Write,
+};
+use std::path::Path;
+use xml::reader::XmlEvent;
+use xml::EventReader;
 
 #[allow(dead_code)]
 pub async fn download_cpe() -> Result<(), Box<dyn std::error::Error>> {
@@ -139,9 +145,8 @@ pub async fn make_cpe_title() -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod tests {
-    use dev_util::log::log_init;
-
     use super::*;
+    use dev_util::log::log_init;
 
     // cargo test cve::tests::test_download_cpe
     #[tokio::test]

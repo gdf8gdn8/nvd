@@ -1,28 +1,53 @@
-use std::{
-    io::{BufReader, Read, Write},
-    path::{Path, PathBuf},
-    sync::Arc,
-};
-
-use redb::ReadableTable;
-
-use crate::format::DbFormat;
-
 use crate::cve_api::{
-    BaseMetricV2, BaseMetricV3, Configurations, CpeMatch, Cve, CveDataMeta, CveItem, CveItemBytes,
-    CvssV2, CvssV3, Description, DescriptionData, Impact, Node, NvdCve, ProblemTypeData,
+    BaseMetricV2,
+    BaseMetricV3,
+    Configurations,
+    CpeMatch,
+    Cve,
+    CveDataMeta,
+    CveItem,
+    CveItemBytes,
+    CvssV2,
+    CvssV3,
+    Description,
+    DescriptionData,
+    Impact,
+    Node,
+    NvdCve,
+    ProblemTypeData,
     Problemtype,
 };
-use chrono::{Datelike, Local};
-
+use crate::format::DbFormat;
+use chrono::{
+    Datelike,
+    Local,
+};
 use futures::future::join_all;
 use prost::Message;
-use sha2::{Digest, Sha256};
-use tokio::{
-    fs::{self, File},
-    io::AsyncWriteExt,
-    task::JoinHandle,
-    time::{sleep, Duration},
+use redb::ReadableTable;
+use sha2::{
+    Digest,
+    Sha256,
+};
+use std::io::{
+    BufReader,
+    Read,
+    Write,
+};
+use std::path::{
+    Path,
+    PathBuf,
+};
+use std::sync::Arc;
+use tokio::fs::{
+    self,
+    File,
+};
+use tokio::io::AsyncWriteExt;
+use tokio::task::JoinHandle;
+use tokio::time::{
+    sleep,
+    Duration,
 };
 
 pub static DATA_DIR: &str = "./data";
@@ -49,9 +74,7 @@ impl NvdCve {
         NvdCve {
             cve_item_bytes_list: items
                 .into_iter()
-                .map(|b| CveItemBytes {
-                    cve_item_bytes: b,
-                })
+                .map(|b| CveItemBytes { cve_item_bytes: b })
                 .collect(),
         }
     }
@@ -93,6 +116,7 @@ impl Cpe23Uri {
             other: get(12),
         }
     }
+
     /// Reconstruct a CPE 2.3 URI string from the parsed component fields.
     pub fn to_string(&self) -> String {
         format!(
@@ -195,10 +219,13 @@ impl Cve {
 impl Configurations {
     fn new(json: &serde_json::Value) -> Configurations {
         let nodes = match json.as_array() {
-            Some(arr) => arr.iter().flat_map(|config| {
-                let inner = Node::new(&config["nodes"]);
-                inner
-            }).collect(),
+            Some(arr) => arr
+                .iter()
+                .flat_map(|config| {
+                    let inner = Node::new(&config["nodes"]);
+                    inner
+                })
+                .collect(),
             None => vec![],
         };
         Configurations { nodes }
@@ -207,7 +234,10 @@ impl Configurations {
 impl BaseMetricV2 {
     pub fn new(json: &serde_json::Value) -> BaseMetricV2 {
         let cvss_data = &json["cvssData"];
-        let base_severity = json["baseSeverity"].as_str().unwrap_or("UNKNOWN").to_owned();
+        let base_severity = json["baseSeverity"]
+            .as_str()
+            .unwrap_or("UNKNOWN")
+            .to_owned();
         let exploitability_score = json["exploitabilityScore"].as_f64().unwrap_or(0.0) as f32;
         let impact_score = json["impactScore"].as_f64().unwrap_or(0.0) as f32;
         let obtain_all_privilege = json["obtainAllPrivilege"].as_bool().unwrap_or(false);
@@ -234,7 +264,10 @@ impl CvssV2 {
             vector_string: json["vectorString"].as_str().unwrap_or("").to_owned(),
             access_vector: json["accessVector"].as_str().unwrap_or("").to_owned(),
             access_complexity: json["accessComplexity"].as_str().unwrap_or("").to_owned(),
-            confidentiality_impact: json["confidentialityImpact"].as_str().unwrap_or("").to_owned(),
+            confidentiality_impact: json["confidentialityImpact"]
+                .as_str()
+                .unwrap_or("")
+                .to_owned(),
             integrity_impact: json["integrityImpact"].as_str().unwrap_or("").to_owned(),
             availability_impact: json["availabilityImpact"].as_str().unwrap_or("").to_owned(),
             base_score: json["baseScore"].as_f64().unwrap_or(0.0) as f32,
@@ -251,7 +284,10 @@ impl CvssV3 {
             privileges_required: json["privilegesRequired"].as_str().unwrap_or("").to_owned(),
             user_interaction: json["userInteraction"].as_str().unwrap_or("").to_owned(),
             scope: json["scope"].as_str().unwrap_or("").to_owned(),
-            confidentiality_impact: json["confidentialityImpact"].as_str().unwrap_or("").to_owned(),
+            confidentiality_impact: json["confidentialityImpact"]
+                .as_str()
+                .unwrap_or("")
+                .to_owned(),
             integrity_impact: json["integrityImpact"].as_str().unwrap_or("").to_owned(),
             availability_impact: json["availabilityImpact"].as_str().unwrap_or("").to_owned(),
             base_score: json["baseScore"].as_f64().unwrap_or(0.0) as f32,
@@ -327,15 +363,11 @@ impl CpeMatch {
             let version_start_excluding = cpe_match["versionStartExcluding"]
                 .as_str()
                 .map(String::from);
-            let version_end_excluding = cpe_match["versionEndExcluding"]
-                .as_str()
-                .map(String::from);
+            let version_end_excluding = cpe_match["versionEndExcluding"].as_str().map(String::from);
             let version_start_including = cpe_match["versionStartIncluding"]
                 .as_str()
                 .map(String::from);
-            let version_end_including = cpe_match["versionEndIncluding"]
-                .as_str()
-                .map(String::from);
+            let version_end_including = cpe_match["versionEndIncluding"].as_str().map(String::from);
             cpe_match_vec.push(CpeMatch {
                 cpe23_uri,
                 version_start_excluding,
@@ -696,8 +728,7 @@ async fn make_db_rmr(path_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error
     let db = redb::Database::create(&db_path)?;
     let txn = db.begin_write()?;
     {
-        let table_def: redb::TableDefinition<u64, &[u8]> =
-            redb::TableDefinition::new("batches");
+        let table_def: redb::TableDefinition<u64, &[u8]> = redb::TableDefinition::new("batches");
         let mut table = txn.open_table(table_def)?;
         let mut batch: Vec<Vec<u8>> = Vec::new();
         let mut key: u64 = 0;
@@ -826,8 +857,7 @@ async fn load_db_rmr(path_dir: &PathBuf) -> Result<Vec<NvdCve>, Box<dyn std::err
     let db_path = path_dir.join("nvdcve.rmr");
     let db = redb::Database::open(&db_path)?;
     let txn = db.begin_read()?;
-    let table_def: redb::TableDefinition<u64, &[u8]> =
-        redb::TableDefinition::new("batches");
+    let table_def: redb::TableDefinition<u64, &[u8]> = redb::TableDefinition::new("batches");
     let table = txn.open_table(table_def)?;
     let mut all_items: Vec<Vec<u8>> = Vec::new();
     for entry in table.iter()? {
@@ -935,10 +965,17 @@ pub async fn init_dir(data_dir: &str) -> Result<PathBuf, Box<dyn std::error::Err
 
 #[cfg(test)]
 mod tests {
-    use dev_util::log::log_init;
-
-    use super::{cpe_match, init_dir, load_db, make_db, sync_cve, Cpe23Uri, DATA_DIR};
+    use super::{
+        cpe_match,
+        init_dir,
+        load_db,
+        make_db,
+        sync_cve,
+        Cpe23Uri,
+        DATA_DIR,
+    };
     use crate::format::DbFormat;
+    use dev_util::log::log_init;
 
     // cargo test cve::tests::test_init_dir
     #[tokio::test]
@@ -989,7 +1026,10 @@ mod tests {
         let results = cpe_match(&cpe23_uri_vec, &db_list).await?;
         println!("results count: {}", results.len());
         for r in results.iter().take(5) {
-            println!("match: {} sev: {} type: {} desc: {}", r.id, r.severity, r.problem_type, r.description);
+            println!(
+                "match: {} sev: {} type: {} desc: {}",
+                r.id, r.severity, r.problem_type, r.description
+            );
         }
         Ok(())
     }
@@ -1009,7 +1049,10 @@ mod tests {
 
     #[test]
     fn test_field_matches() {
-        use super::{field_matches, Cpe23Uri};
+        use super::{
+            field_matches,
+            Cpe23Uri,
+        };
         let input = Cpe23Uri::new("cpe:2.3:a:vmware:rabbitmq:3.9.10:*:*:*:*:*:*:*");
         let rule = Cpe23Uri::new("cpe:2.3:a:vmware:rabbitmq:*:*:*:*:*:*:*:*");
         assert!(field_matches(&input, &rule));
@@ -1026,7 +1069,10 @@ mod tests {
 
     #[test]
     fn test_version_matches() {
-        use super::{version_matches, Cpe23Uri};
+        use super::{
+            version_matches,
+            Cpe23Uri,
+        };
         use crate::cve_api::CpeMatch;
 
         let rule = Cpe23Uri::new("cpe:2.3:a:vmware:rabbitmq:*:*:*:*:*:*:*:*");
@@ -1080,7 +1126,9 @@ mod tests {
         let runtime = Builder::new_multi_thread().enable_all().build().unwrap();
         log_init();
         let path_dir = runtime.block_on(init_dir(DATA_DIR)).unwrap();
-        let db_list = runtime.block_on(load_db(&path_dir, DbFormat::Protobuf)).unwrap();
+        let db_list = runtime
+            .block_on(load_db(&path_dir, DbFormat::Protobuf))
+            .unwrap();
         log::info!("{}", db_list.len());
         let mut cpe23_uri_vec = Vec::new();
         let line = "cpe:2.3:a:vmware:rabbitmq:3.9.10:*:*:*:*:*:*:*";
@@ -1091,7 +1139,10 @@ mod tests {
             .unwrap();
         println!("results count: {}", results.len());
         for r in results.iter().take(5) {
-            println!("match: {} sev: {} type: {} desc: {}", r.id, r.severity, r.problem_type, r.description);
+            println!(
+                "match: {} sev: {} type: {} desc: {}",
+                r.id, r.severity, r.problem_type, r.description
+            );
         }
     }
 }

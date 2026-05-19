@@ -1,17 +1,30 @@
-use std::str::FromStr;
-
 use chrono::NaiveDate;
 use clap::Parser;
-use dev_util::log::{log_init_with_level, Level};
-use indicatif::{ProgressBar, ProgressStyle};
-use nvd::{
-    cpe::{download_cpe, make_cpe_dictionary, make_cpe_title},
-    cve::{
-        cpe23_uri_list_to_string, cpe_match, init_dir, load_db, make_db, sync_cve, Cpe23Uri,
-        DATA_DIR,
-    },
-    format::DbFormat,
+use dev_util::log::{
+    log_init_with_level,
+    Level,
 };
+use indicatif::{
+    ProgressBar,
+    ProgressStyle,
+};
+use nvd::cpe::{
+    download_cpe,
+    make_cpe_dictionary,
+    make_cpe_title,
+};
+use nvd::cve::{
+    cpe23_uri_list_to_string,
+    cpe_match,
+    init_dir,
+    load_db,
+    make_db,
+    sync_cve,
+    Cpe23Uri,
+    DATA_DIR,
+};
+use nvd::format::DbFormat;
+use std::str::FromStr;
 
 #[derive(Clone, Debug, Parser)]
 #[command(version, about, long_about = None)]
@@ -108,7 +121,8 @@ fn spinner(msg: &str) -> ProgressBar {
     pb.set_style(
         ProgressStyle::default_spinner()
             .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ ")
-            .template("{spinner:.green} {msg}").unwrap(),
+            .template("{spinner:.green} {msg}")
+            .unwrap(),
     );
     pb.set_message(msg.to_string());
     pb.enable_steady_tick(std::time::Duration::from_millis(80));
@@ -226,7 +240,11 @@ async fn cve(
         let total = results.len();
         let mut sev: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
         for r in &results {
-            let s = if r.severity.is_empty() { "UNKNOWN" } else { &r.severity };
+            let s = if r.severity.is_empty() {
+                "UNKNOWN"
+            } else {
+                &r.severity
+            };
             *sev.entry(s).or_insert(0) += 1;
         }
         println!("\n--- statistics ---");
