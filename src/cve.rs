@@ -24,7 +24,10 @@ use chrono::{
 };
 use futures::future::join_all;
 use prost::Message;
-use redb::{ReadableDatabase, ReadableTable};
+use redb::{
+    ReadableDatabase,
+    ReadableTable,
+};
 use sha2::{
     Digest,
     Sha256,
@@ -961,7 +964,9 @@ async fn load_db_turso(path_dir: &PathBuf) -> Result<Vec<NvdCve>, Box<dyn std::e
         .build()
         .await?;
     let conn = db.connect()?;
-    let mut stmt = conn.prepare("SELECT data FROM cve_items ORDER BY id").await?;
+    let mut stmt = conn
+        .prepare("SELECT data FROM cve_items ORDER BY id")
+        .await?;
     let mut rows = stmt.query(()).await?;
     let mut all_items = Vec::new();
     while let Some(row) = rows.next().await? {

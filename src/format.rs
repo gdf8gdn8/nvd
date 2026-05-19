@@ -16,7 +16,10 @@ use crate::cve_api::{
     NvdCve,
 };
 use prost::Message;
-use redb::{ReadableDatabase, ReadableTable};
+use redb::{
+    ReadableDatabase,
+    ReadableTable,
+};
 use std::error::Error;
 use std::io::Read;
 
@@ -293,7 +296,10 @@ fn encode_turso(items: &[Vec<u8>]) -> Vec<u8> {
             .await
             .unwrap();
         }
-        let _ = conn.pragma_update("wal_checkpoint", "TRUNCATE").await.unwrap();
+        let _ = conn
+            .pragma_update("wal_checkpoint", "TRUNCATE")
+            .await
+            .unwrap();
         let _ = conn.cacheflush();
     });
     let mut bytes = Vec::new();
@@ -322,7 +328,9 @@ fn decode_turso(data: &[u8]) -> Result<Vec<Vec<u8>>, Box<dyn Error>> {
             .build()
             .await?;
         let conn = db.connect()?;
-        let mut stmt = conn.prepare("SELECT data FROM cve_items ORDER BY id").await?;
+        let mut stmt = conn
+            .prepare("SELECT data FROM cve_items ORDER BY id")
+            .await?;
         let mut rows = stmt.query(()).await?;
         let mut items = Vec::new();
         while let Some(row) = rows.next().await? {
