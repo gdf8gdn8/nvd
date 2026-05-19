@@ -8,7 +8,38 @@ Add this to your *Cargo.toml*:
 nvd = "0.1"
 ```
 
-### Examples
+### CLI
+
+The `nvd` binary provides a `cve` subcommand for matching CVEs and a `cpe` subcommand for building the CPE dictionary.
+
+```
+# Match CVEs for a CPE URI (syncs + builds DB first)
+nvd cve "cpe:2.3:a:vmware:rabbitmq:3.9.10:*:*:*:*:*:*:*"
+
+# Skip data sync and reuse existing download cache
+nvd cve --no-sync "cpe:2.3:a:qt:qt:4.8.7:*:*:*:*:*:*:*"
+
+# Delete and regenerate the database from downloaded JSON
+nvd cve --rebuild "cpe:2.3:a:vmware:rabbitmq:3.9.10:*:*:*:*:*:*:*"
+
+# Show severity statistics after results
+nvd cve --stat "cpe:2.3:a:vmware:rabbitmq:3.9.10:*:*:*:*:*:*:*"
+
+# Filter by published date range
+nvd cve --from-date 2023-01-01 --to-date 2023-12-31 "cpe:2.3:a:qt:qt:4.8.7:*:*:*:*:*:*:*"
+
+# Sort results by severity (descending), id, or date
+nvd cve --sort severity "cpe:2.3:a:vmware:rabbitmq:3.9.10:*:*:*:*:*:*:*"
+nvd cve --sort id "cpe:2.3:a:vmware:rabbitmq:3.9.10:*:*:*:*:*:*:*"
+
+# All flags can be combined
+nvd cve --no-sync --rebuild --stat --sort severity --from-date 2023-06-01 "cpe:2.3:a:vmware:rabbitmq:3.9.10:*:*:*:*:*:*:*"
+
+# Build CPE dictionary and title index
+nvd cpe
+```
+
+### Library Examples
 ```rust
 use std::{env, process};
 

@@ -1,10 +1,10 @@
 use std::{
     fs::{self, File},
-    io::{BufReader, BufWriter, Read, Write},
+    io::{BufReader, Read, Write},
     path::Path,
 };
 
-use flate2::{read::GzDecoder, write::GzEncoder, Compression};
+
 
 use prost::Message;
 use xml::{reader::XmlEvent, EventReader};
@@ -79,31 +79,30 @@ pub async fn make_cpe_dictionary() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     log::info!("dictionary size: {}", cpe_dictionary.cpe23_list.len());
-    let path_proto_gz = "./data/cpe_dictionary.proto.gz";
-    let file_proto_gz = File::create(path_proto_gz).unwrap();
-    let buf_writer = BufWriter::new(file_proto_gz);
-    let mut gz_encoder = GzEncoder::new(buf_writer, Compression::default());
+    let path_proto = "./data/cpe_dictionary.proto.zst";
+    let file_proto = File::create(path_proto).unwrap();
     let mut buf: Vec<u8> = Vec::new();
     cpe_dictionary.encode(&mut buf).unwrap();
     drop(cpe_dictionary);
-    gz_encoder.write_all(&buf).unwrap();
+    let mut encoder = zstd::stream::write::Encoder::new(file_proto, 0).unwrap();
+    encoder.write_all(&buf).unwrap();
+    encoder.finish().unwrap();
     Ok(())
 }
 
 pub async fn make_cpe_title() -> Result<(), Box<dyn std::error::Error>> {
-    let path_proto_gz = "./data/cpe_dictionary.proto.gz";
-    let file_proto_gz = File::open(path_proto_gz).unwrap();
-    let buf_reader = BufReader::new(file_proto_gz);
-    let gz_decoder = GzDecoder::new(buf_reader);
-    let mut buf_reader = BufReader::new(gz_decoder);
+    let path_proto = "./data/cpe_dictionary.proto.zst";
+    let file_proto = File::open(path_proto).unwrap();
     let mut buf = Vec::new();
-    buf_reader.read_to_end(&mut buf).unwrap();
+    zstd::stream::read::Decoder::new(file_proto)
+        .unwrap()
+        .read_to_end(&mut buf)
+        .unwrap();
     let cpe23_dictionary: Cpe23Dictionary = prost::Message::decode(buf.as_slice()).unwrap();
     let mut cpe23_title = Cpe23Title::default();
     for cpe23 in cpe23_dictionary.cpe23_list {
         // cpe:2.3:a:10web:slider:1.1.71:*:*:*:*:wordpress:*:*
         let cpe23uri_vec: Vec<&str> = cpe23.cpe23_uri.split(":").collect();
-
         // if !"*".eq(cpe23uri_vec[10]) || !"*".eq(cpe23uri_vec[11]) {
         //     log::info!("{:?}", cpe23);
         // }
@@ -125,15 +124,16 @@ pub async fn make_cpe_title() -> Result<(), Box<dyn std::error::Error>> {
         // }
         cpe23_title.cpe23_title_map.insert(key.to_owned(), value);
     }
-    log::info!("cpe23 title size: {}", cpe23_title.cpe23_title_map.len());
-    let path_proto_gz = "./data/cpe23_title.proto.gz";
-    let file_proto_gz = File::create(path_proto_gz).unwrap();
-    let buf_writer = BufWriter::new(file_proto_gz);
-    let mut gz_encoder = GzEncoder::new(buf_writer, Compression::default());
+    // log::info!("cpe23 title size: {}", cpe23_title.cpe23_title_map.len());
+    let path_proto = "./data/cpe23_title.proto.zst";
+    let file_proto = File::create(path_proto).unwrap();
     let mut buf: Vec<u8> = Vec::new();
     cpe23_title.encode(&mut buf).unwrap();
     drop(cpe23_title);
-    gz_encoder.write_all(&buf).unwrap();
+    zstd::stream::write::Encoder::new(file_proto, 0)
+        .unwrap()
+        .write_all(&buf)
+        .unwrap();
     Ok(())
 }
 

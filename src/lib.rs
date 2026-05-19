@@ -9,9 +9,10 @@
 //! ```
 //!
 //! ### Examples
-//! ```rust
+//! ```rust,no_run
 //!
 //! use std::{env, process};
+//! use dev_util::log::log_init;
 //!
 //! use nvd::{
 //!     cpe::{download_cpe, make_cpe_dictionary, make_cpe_title},
