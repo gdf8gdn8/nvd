@@ -12,8 +12,6 @@ fn bench_load_db(c: &mut Criterion) {
     for format in &[
         DbFormat::Protobuf,
         DbFormat::MessagePack,
-        DbFormat::Rkyv,
-        DbFormat::Mmap,
         DbFormat::RkyvMmapRedb,
     ] {
         let label = format!("load_db_{:?}", format);

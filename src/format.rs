@@ -7,10 +7,7 @@
 //! * **MessagePack** — via `rmp-serde` (compact binary JSON)
 //! * **FlatBuffers** — via `flatbuffers` crate (zero-copy, non-size-prefixed)
 //! * **CapnProto** — size-prefixed binary format (via `flatbuffers` builder)
-//! * **Rkyv** — zero-copy deserialization via `rkyv`, compressed (`.rkyv.zst`)
-//! * **Mmap** — memory-map friendly rkyv archive, no compression (`.mmap`)
-//! * **Redb** — embedded key-value database via `redb` (`.redb`)
-//! * **RkyvMmapRedb** — complete combination: rkyv serialized batches in a
+//! * **RkyvMmapRedb** — complete combination: rkyv-serialised batches in a
 //!   redb database, accessed via memory-mapped I/O (`.rmr`)
 
 use std::error::Error;
@@ -36,12 +33,6 @@ pub enum DbFormat {
     FlatBuffers,
     /// Size-prefixed binary container.  File extension: `.capnp.zst`.
     CapnProto,
-    /// rkyv zero-copy archive.  File extension: `.rkyv.zst`.
-    Rkyv,
-    /// Memory-map friendly rkyv archive (no compression).  File extension: `.mmap`.
-    Mmap,
-    /// Redb embedded database.  File extension: `.redb`.
-    Redb,
     /// Complete combination: rkyv-encoded batches in a redb database,
     /// accessible via memory-mapped I/O.  File extension: `.rmr`.
     RkyvMmapRedb,
@@ -55,30 +46,18 @@ impl DbFormat {
             DbFormat::MessagePack => ".msgpack.zst",
             DbFormat::FlatBuffers => ".flatbuf.zst",
             DbFormat::CapnProto => ".capnp.zst",
-            DbFormat::Rkyv => ".rkyv.zst",
-            DbFormat::Mmap => ".mmap",
-            DbFormat::Redb => ".redb",
             DbFormat::RkyvMmapRedb => ".rmr",
         }
     }
 
     /// Whether this format uses zstd compression.
     pub fn uses_zstd(&self) -> bool {
-        !matches!(self, DbFormat::Mmap | DbFormat::Redb | DbFormat::RkyvMmapRedb)
+        !matches!(self, DbFormat::RkyvMmapRedb)
     }
 
     /// All known database file extensions, used by `--rebuild` to purge old files.
     pub fn all_extensions() -> &'static [&'static str] {
-        &[
-            ".proto.zst",
-            ".msgpack.zst",
-            ".flatbuf.zst",
-            ".capnp.zst",
-            ".rkyv.zst",
-            ".mmap",
-            ".redb",
-            ".rmr",
-        ]
+        &[".proto.zst", ".msgpack.zst", ".flatbuf.zst", ".capnp.zst", ".rmr"]
     }
 
     /// Serialise a list of CVE item byte blobs into a single byte buffer.
@@ -88,9 +67,6 @@ impl DbFormat {
             DbFormat::MessagePack => encode_msgpack(items),
             DbFormat::FlatBuffers => encode_flatbuf(items),
             DbFormat::CapnProto => encode_capnp(items),
-            DbFormat::Rkyv => encode_rkyv(items),
-            DbFormat::Mmap => encode_rkyv(items),
-            DbFormat::Redb => encode_redb(items),
             DbFormat::RkyvMmapRedb => encode_rmr(items),
         }
     }
@@ -102,9 +78,6 @@ impl DbFormat {
             DbFormat::MessagePack => decode_msgpack(data),
             DbFormat::FlatBuffers => decode_flatbuf(data),
             DbFormat::CapnProto => decode_capnp(data),
-            DbFormat::Rkyv => decode_rkyv(data),
-            DbFormat::Mmap => decode_rkyv(data),
-            DbFormat::Redb => decode_redb(data),
             DbFormat::RkyvMmapRedb => decode_rmr(data),
         }
     }
@@ -184,7 +157,7 @@ fn decode_capnp(data: &[u8]) -> Result<Vec<Vec<u8>>, Box<dyn Error>> {
     unpack_items(&packed)
 }
 
-// ── Rkyv ──────────────────────────────────────────────────────────────
+// ── Rkyv Mmap Redb (complete combination) ──────────────────────────────
 
 use rkyv::{Archive, Deserialize, Serialize};
 
@@ -194,7 +167,7 @@ struct RkyvContainer {
     items: Vec<Vec<u8>>,
 }
 
-fn encode_rkyv(items: &[Vec<u8>]) -> Vec<u8> {
+pub(crate) fn encode_rkyv(items: &[Vec<u8>]) -> Vec<u8> {
     let container = RkyvContainer {
         items: items.to_vec(),
     };
@@ -204,7 +177,7 @@ fn encode_rkyv(items: &[Vec<u8>]) -> Vec<u8> {
         .to_vec()
 }
 
-fn decode_rkyv(data: &[u8]) -> Result<Vec<Vec<u8>>, Box<dyn Error>> {
+pub(crate) fn decode_rkyv(data: &[u8]) -> Result<Vec<Vec<u8>>, Box<dyn Error>> {
     let archived = rkyv::check_archived_root::<RkyvContainer>(data)?;
     let mut out = Vec::with_capacity(archived.items.len());
     for item in archived.items.iter() {
@@ -212,54 +185,6 @@ fn decode_rkyv(data: &[u8]) -> Result<Vec<Vec<u8>>, Box<dyn Error>> {
     }
     Ok(out)
 }
-
-// ── Redb ──────────────────────────────────────────────────────────────
-
-fn encode_redb(items: &[Vec<u8>]) -> Vec<u8> {
-    let dir = std::env::temp_dir();
-    let path = dir.join("nvd_redb_encode.tmp");
-    let _ = std::fs::remove_file(&path);
-    let db = redb::Database::create(&path).unwrap();
-    let txn = db.begin_write().unwrap();
-    {
-        let table_def: redb::TableDefinition<u64, &[u8]> =
-            redb::TableDefinition::new("cve_items");
-        let mut table = txn.open_table(table_def).unwrap();
-        for (i, item) in items.iter().enumerate() {
-            table.insert(i as u64, item.as_slice()).unwrap();
-        }
-    }
-    txn.commit().unwrap();
-    let mut bytes = Vec::new();
-    std::fs::File::open(&path)
-        .unwrap()
-        .read_to_end(&mut bytes)
-        .unwrap();
-    let _ = std::fs::remove_file(&path);
-    bytes
-}
-
-fn decode_redb(data: &[u8]) -> Result<Vec<Vec<u8>>, Box<dyn Error>> {
-    let dir = std::env::temp_dir();
-    let path = dir.join("nvd_redb_decode.tmp");
-    let _ = std::fs::remove_file(&path);
-    std::fs::write(&path, data)?;
-    let db = redb::Database::open(&path)?;
-    let txn = db.begin_read()?;
-    let table_def: redb::TableDefinition<u64, &[u8]> =
-        redb::TableDefinition::new("cve_items");
-    let table = txn.open_table(table_def)?;
-    let mut items = Vec::new();
-    for entry in table.iter()? {
-        let (_key, value) = entry?;
-        items.push(value.value().to_vec());
-    }
-    let _ = std::fs::remove_file(&path);
-    items.shrink_to_fit();
-    Ok(items)
-}
-
-// ── Rkyv + Mmap + Redb (complete combination) ──────────────────────
 
 /// Encode items as rkyv archives stored in a redb database.
 ///
@@ -398,21 +323,6 @@ mod tests {
     }
 
     #[test]
-    fn test_rkyv_roundtrip() {
-        roundtrip(DbFormat::Rkyv);
-    }
-
-    #[test]
-    fn test_mmap_roundtrip() {
-        roundtrip(DbFormat::Mmap);
-    }
-
-    #[test]
-    fn test_redb_roundtrip() {
-        roundtrip(DbFormat::Redb);
-    }
-
-    #[test]
     fn test_rmr_roundtrip() {
         roundtrip(DbFormat::RkyvMmapRedb);
     }
@@ -431,11 +341,8 @@ mod tests {
     fn test_all_extensions() {
         let exts = DbFormat::all_extensions();
         assert!(exts.contains(&".proto.zst"));
-        assert!(exts.contains(&".rkyv.zst"));
-        assert!(exts.contains(&".mmap"));
-        assert!(exts.contains(&".redb"));
         assert!(exts.contains(&".rmr"));
-        assert_eq!(exts.len(), 8);
+        assert_eq!(exts.len(), 5);
     }
 
     #[test]
@@ -444,9 +351,6 @@ mod tests {
         assert!(DbFormat::MessagePack.uses_zstd());
         assert!(DbFormat::FlatBuffers.uses_zstd());
         assert!(DbFormat::CapnProto.uses_zstd());
-        assert!(DbFormat::Rkyv.uses_zstd());
-        assert!(!DbFormat::Mmap.uses_zstd());
-        assert!(!DbFormat::Redb.uses_zstd());
         assert!(!DbFormat::RkyvMmapRedb.uses_zstd());
     }
 }
