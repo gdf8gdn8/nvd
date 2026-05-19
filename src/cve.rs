@@ -24,7 +24,7 @@ use chrono::{
 };
 use futures::future::join_all;
 use prost::Message;
-use redb::ReadableTable;
+use redb::{ReadableDatabase, ReadableTable};
 use sha2::{
     Digest,
     Sha256,

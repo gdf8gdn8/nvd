@@ -15,7 +15,7 @@ use crate::cve_api::{
     NvdCve,
 };
 use prost::Message;
-use redb::ReadableTable;
+use redb::{ReadableDatabase, ReadableTable};
 use std::error::Error;
 use std::io::Read;
 
