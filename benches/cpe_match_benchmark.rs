@@ -22,6 +22,9 @@ fn bench_load_db(c: &mut Criterion) {
         DbFormat::Protobuf,
         DbFormat::MessagePack,
         DbFormat::RkyvMmapRedb,
+        DbFormat::FlatBuffers,
+        DbFormat::CapnProto,
+        DbFormat::Turso,
     ] {
         let label = format!("load_db_{:?}", format);
         c.bench_function(&label, |b| {
